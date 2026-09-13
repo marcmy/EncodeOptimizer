@@ -36,6 +36,20 @@ Describe 'content-aware sample selection' {
         ($searchStarts | Measure-Object -Maximum).Maximum | Should -BeGreaterThan 80
     }
 
+    It 'keeps independent verification clips temporally non-overlapping when enough windows exist' {
+        $windows = 0..11 | ForEach-Object { New-FeatureWindow -Start ($_ * 5) }
+        $selection = Select-EOSamples -FeatureWindows $windows -Duration 65 -SearchCount 4 -VerificationCount 2 -SampleDuration 10
+
+        $selection.VerificationSamples.Count | Should -Be 2
+        foreach ($verify in $selection.VerificationSamples) {
+            foreach ($search in $selection.SearchSamples) {
+                $overlaps = ([double]$verify.Start -lt ([double]$search.Start + [double]$search.Duration)) -and
+                            ([double]$search.Start -lt ([double]$verify.Start + [double]$verify.Duration))
+                $overlaps | Should -BeFalse
+            }
+        }
+    }
+
     It 'deliberately includes difficult motion detail noise dark gradient and scene-change content' {
         $windows = @(
             (New-FeatureWindow 0),
