@@ -215,7 +215,7 @@ The Windows GitHub Actions workflow runs unit and real FFmpeg integration jobs s
 - the public single-file analyze/report path;
 - recursive batch filtering, per-file output reports, and a real second-run exact resume.
 
-At the current branch revision the suite contains **71 passing unit tests and 5 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
+At the current branch revision the suite contains **77 passing unit tests and 5 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
 
 ## Design documents
 
