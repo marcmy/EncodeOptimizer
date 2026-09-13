@@ -21,10 +21,57 @@ function Get-EOProfileMaxBitDepth {
     return $max
 }
 
+function Get-EOProfilePixelFormatCharacteristics {
+    param([Parameter(Mandatory)][string]$PixelFormat)
+
+    $format = $PixelFormat.ToLowerInvariant()
+    if ($format -match '^yuvj?(420|422|444)p(?:(9|10|12|14|16)(?:le|be))?$') {
+        return [pscustomobject]@{
+            PixelFormat = $format
+            ChromaRank = switch ($Matches[1]) { '420' { 1 } '422' { 2 } '444' { 3 } }
+            BitDepth = if ($Matches[2]) { [int]$Matches[2] } else { 8 }
+        }
+    }
+    if ($format -in @('nv12','nv21')) { return [pscustomobject]@{ PixelFormat=$format; ChromaRank=1; BitDepth=8 } }
+    if ($format -eq 'nv16') { return [pscustomobject]@{ PixelFormat=$format; ChromaRank=2; BitDepth=8 } }
+    if ($format -eq 'nv24') { return [pscustomobject]@{ PixelFormat=$format; ChromaRank=3; BitDepth=8 } }
+    if ($format -match '^p([024])(10|12|16)(?:le|be)$') {
+        return [pscustomobject]@{
+            PixelFormat = $format
+            ChromaRank = switch ($Matches[1]) { '0' { 1 } '2' { 2 } '4' { 3 } }
+            BitDepth = [int]$Matches[2]
+        }
+    }
+    return $null
+}
+
+function Test-EOProfilePreservesPixelFormat {
+    param($ConfigEntry, $SourceProbe)
+
+    $sourceFormat = ([string]$SourceProbe.Video.PixelFormat).ToLowerInvariant()
+    $sourceBitDepth = [int]$SourceProbe.Video.BitDepth
+    $formats = @($ConfigEntry.PixelFormats | ForEach-Object { ([string]$_).ToLowerInvariant() })
+
+    if ($formats -contains $sourceFormat) { return $true }
+
+    $sourceInfo = Get-EOProfilePixelFormatCharacteristics -PixelFormat $sourceFormat
+    if ($null -eq $sourceInfo) { return $false }
+
+    foreach ($format in $formats) {
+        $candidate = Get-EOProfilePixelFormatCharacteristics -PixelFormat $format
+        if ($null -eq $candidate) { continue }
+        if ([int]$candidate.BitDepth -ge $sourceBitDepth -and [int]$candidate.ChromaRank -ge [int]$sourceInfo.ChromaRank) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-EOEncoderSupportsSource {
     param($ConfigEntry, $SourceProbe)
     if ($SourceProbe.Video.IsHdr -and -not [bool]$ConfigEntry.SupportsHdr) { return $false }
     if ([int]$SourceProbe.Video.BitDepth -gt (Get-EOProfileMaxBitDepth $ConfigEntry)) { return $false }
+    if (-not (Test-EOProfilePreservesPixelFormat $ConfigEntry $SourceProbe)) { return $false }
     return $true
 }
 
@@ -74,7 +121,7 @@ function Resolve-EOEncoderProfile {
 
     $entry = $config[$Name]
     if (-not (Test-EOEncoderSupportsSource $entry $SourceProbe)) {
-        throw "Encoder '$Name' cannot safely preserve this source's bit depth/HDR characteristics."
+        throw "Encoder '$Name' cannot safely preserve this source's bit depth, chroma sampling, or HDR characteristics."
     }
 
     $options = Get-EOCapabilityEncoderOptions $Capabilities $Name
