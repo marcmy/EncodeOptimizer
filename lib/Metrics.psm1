@@ -312,6 +312,7 @@ function Invoke-EOMetrics {
     $referenceFilter = [string]$MetricPlan.ReferenceMetricFilter
     $candidateFilter = [string]$MetricPlan.CandidateMetricFilter
     $pairCount = $metrics.Count
+    $mappedOutputIndex = $metrics.Count - 1
 
     $graph = [System.Collections.Generic.List[string]]::new()
     $graph.Add("[0:v]$referenceFilter,split=$pairCount" + (@(0..($pairCount-1) | ForEach-Object { "[r$_]" }) -join ''))
@@ -327,21 +328,18 @@ function Invoke-EOMetrics {
                     $ref = "[rv$i]"; $dist = "[dv$i]"
                 }
                 $graph.Add("$dist$ref" + "libvmaf=log_fmt=json:log_path='$(ConvertTo-EOFilterPath $vmafPath)'[m$i]")
-                $graph.Add("[m$i]nullsink")
             }
             'xpsnr' {
                 $graph.Add("[d$i][r$i]xpsnr=stats_file='$(ConvertTo-EOFilterPath $xpsnrPath)'[m$i]")
-                $graph.Add("[m$i]nullsink")
             }
             'ssim' {
                 $graph.Add("[d$i][r$i]ssim=stats_file='$(ConvertTo-EOFilterPath $ssimPath)'[m$i]")
-                $graph.Add("[m$i]nullsink")
             }
             'psnr' {
                 $graph.Add("[d$i][r$i]psnr=stats_file='$(ConvertTo-EOFilterPath $psnrPath)'[m$i]")
-                $graph.Add("[m$i]nullsink")
             }
         }
+        if ($i -ne $mappedOutputIndex) { $graph.Add("[m$i]nullsink") }
     }
 
     $arguments = [System.Collections.Generic.List[string]]::new()
@@ -351,6 +349,7 @@ function Invoke-EOMetrics {
     $arguments.Add('-i'); $arguments.Add($CandidatePath)
     if ($Duration -gt 0) { $arguments.Add('-t'); $arguments.Add($Duration.ToString([Globalization.CultureInfo]::InvariantCulture)) }
     $arguments.Add('-filter_complex'); $arguments.Add(($graph -join ';'))
+    $arguments.Add('-map'); $arguments.Add("[m$mappedOutputIndex]")
     $arguments.Add('-f'); $arguments.Add('null'); $arguments.Add('-')
 
     if ($CommandRunner) {
