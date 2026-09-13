@@ -18,9 +18,7 @@ function Get-EOAnalysisWindows {
     $maxStart = [math]::Max(0.0, $Duration - $WindowDuration)
     $count = [math]::Max(1, [math]::Min($WindowCount, [math]::Ceiling($Duration / [math]::Max(1.0, $WindowDuration / 2.0))))
 
-    if ($count -eq 1) {
-        return @([pscustomobject]@{ Start = 0.0; Duration = $WindowDuration })
-    }
+    if ($count -eq 1) { return @([pscustomobject]@{ Start = 0.0; Duration = $WindowDuration }) }
 
     $step = $maxStart / ($count - 1)
     $result = for ($i = 0; $i -lt $count; $i++) {
@@ -35,9 +33,7 @@ function Get-EOValuesFromScan {
     $values = [System.Collections.Generic.List[double]]::new()
     foreach ($match in [regex]::Matches($Text, "(?m)^$([regex]::Escape($Key))=([-+0-9.eE]+)\s*$")) {
         $parsed = 0.0
-        if ([double]::TryParse($match.Groups[1].Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
-            $values.Add($parsed)
-        }
+        if ([double]::TryParse($match.Groups[1].Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) { $values.Add($parsed) }
     }
     return @($values)
 }
@@ -104,16 +100,9 @@ function Get-EOContentFeatures {
         $static = Limit-EOUnit (1.0 - ($motion * 4.0))
 
         $features.Add([pscustomobject]@{
-            Start = [double]$window.Start
-            Duration = [double]$window.Duration
-            Motion = $motion
-            Detail = $detail
-            Noise = $noise
-            Dark = $dark
-            Gradient = $gradient
-            Scene = $scene
-            Static = $static
-            Black = Limit-EOUnit $blackFraction
+            Start = [double]$window.Start; Duration = [double]$window.Duration
+            Motion = $motion; Detail = $detail; Noise = $noise; Dark = $dark
+            Gradient = $gradient; Scene = $scene; Static = $static; Black = Limit-EOUnit $blackFraction
         })
     }
     return @($features)
@@ -128,12 +117,9 @@ function Get-EOFeatureValue {
 
 function Get-EOSampleScore {
     param($Window)
-    $hard = 0.24*(Get-EOFeatureValue $Window 'Motion') +
-            0.22*(Get-EOFeatureValue $Window 'Detail') +
-            0.17*(Get-EOFeatureValue $Window 'Noise') +
-            0.12*(Get-EOFeatureValue $Window 'Dark') +
-            0.10*(Get-EOFeatureValue $Window 'Gradient') +
-            0.15*(Get-EOFeatureValue $Window 'Scene')
+    $hard = 0.24*(Get-EOFeatureValue $Window 'Motion') + 0.22*(Get-EOFeatureValue $Window 'Detail') +
+            0.17*(Get-EOFeatureValue $Window 'Noise') + 0.12*(Get-EOFeatureValue $Window 'Dark') +
+            0.10*(Get-EOFeatureValue $Window 'Gradient') + 0.15*(Get-EOFeatureValue $Window 'Scene')
     return $hard - 1.5*(Get-EOFeatureValue $Window 'Black') - 1.0*(Get-EOFeatureValue $Window 'Static')
 }
 
@@ -141,11 +127,8 @@ function New-EOSampleObject {
     param($Window, [double]$Duration, [string[]]$Reasons)
     $actualDuration = [math]::Max(0.25, [math]::Min([double]$Window.Duration, $Duration - [double]$Window.Start))
     [pscustomobject]@{
-        Start = [double]$Window.Start
-        Duration = $actualDuration
-        Reasons = @($Reasons | Select-Object -Unique)
-        Score = Get-EOSampleScore $Window
-        Features = $Window
+        Start = [double]$Window.Start; Duration = $actualDuration
+        Reasons = @($Reasons | Select-Object -Unique); Score = Get-EOSampleScore $Window; Features = $Window
     }
 }
 
@@ -162,10 +145,7 @@ function Select-EOSamples {
     if ($Duration -le 0) { throw 'Duration must be greater than zero.' }
     $windows = @($FeatureWindows | Where-Object { [double]$_.Start -lt $Duration } | Sort-Object Start)
     if ($windows.Count -eq 0) { throw 'No usable analysis windows were supplied.' }
-
-    foreach ($window in $windows) {
-        $window.Duration = [math]::Min($SampleDuration, [math]::Max(0.25, $Duration - [double]$window.Start))
-    }
+    foreach ($window in $windows) { $window.Duration = [math]::Min($SampleDuration, [math]::Max(0.25, $Duration - [double]$window.Start)) }
 
     $targetVerify = [math]::Min($VerificationCount, [math]::Max(0, $windows.Count - 1))
     $targetSearch = [math]::Min($SearchCount, $windows.Count - $targetVerify)
@@ -183,29 +163,24 @@ function Select-EOSamples {
         if (-not $reasonMap[$key].Contains($Reason)) { $reasonMap[$key].Add($Reason) }
     }
 
-    # Temporal anchors protect against choosing only one difficult cluster.
-    Add-SearchWindow ($usable | Select-Object -First 1) 'temporal'
-    Add-SearchWindow ($usable | Select-Object -Last 1) 'temporal'
-
+    # Explicit difficult categories take priority so an important scene cannot be crowded out by generic anchors.
     foreach ($feature in @('Motion','Detail','Noise','Dark','Gradient','Scene')) {
         $candidate = $usable | Sort-Object @{ Expression = { Get-EOFeatureValue $_ $feature }; Descending = $true }, @{ Expression = { Get-EOSampleScore $_ }; Descending = $true }, Start | Select-Object -First 1
         if ($candidate -and (Get-EOFeatureValue $candidate $feature) -ge 0.5) { Add-SearchWindow $candidate $feature.ToLowerInvariant() }
     }
 
+    # Add timeline anchors only after known hard categories are represented.
+    Add-SearchWindow ($usable | Select-Object -First 1) 'temporal'
+    Add-SearchWindow ($usable | Select-Object -Last 1) 'temporal'
+
     $remainingByScore = @($usable | Where-Object { -not $selected.Contains([string][double]$_.Start) } | Sort-Object @{ Expression = { Get-EOSampleScore $_ }; Descending = $true }, Start)
     foreach ($candidate in $remainingByScore) { if ($selected.Count -ge $targetSearch) { break }; Add-SearchWindow $candidate 'representative' }
     foreach ($candidate in $windows) { if ($selected.Count -ge $targetSearch) { break }; Add-SearchWindow $candidate 'fallback' }
 
-    $searchSamples = @($selected.GetEnumerator() | ForEach-Object {
-        New-EOSampleObject -Window $_.Value -Duration $Duration -Reasons @($reasonMap[$_.Key])
-    } | Sort-Object Start)
-
+    $searchSamples = @($selected.GetEnumerator() | ForEach-Object { New-EOSampleObject -Window $_.Value -Duration $Duration -Reasons @($reasonMap[$_.Key]) } | Sort-Object Start)
     $searchStarts = @($searchSamples.Start)
     $remaining = @($windows | Where-Object { $searchStarts -notcontains [double]$_.Start })
-    $verifyRanked = @($remaining | Sort-Object @{ Expression = {
-        $penalty = 1.5*(Get-EOFeatureValue $_ 'Black') + 0.8*(Get-EOFeatureValue $_ 'Static')
-        (Get-EOSampleScore $_) - $penalty
-    }; Descending = $true }, Start)
+    $verifyRanked = @($remaining | Sort-Object @{ Expression = { (Get-EOSampleScore $_) - 1.5*(Get-EOFeatureValue $_ 'Black') - 0.8*(Get-EOFeatureValue $_ 'Static') }; Descending = $true }, Start)
 
     $verificationSamples = [System.Collections.Generic.List[object]]::new()
     foreach ($candidate in $verifyRanked) {
@@ -213,11 +188,7 @@ function Select-EOSamples {
         $verificationSamples.Add((New-EOSampleObject -Window $candidate -Duration $Duration -Reasons @('verification')))
     }
 
-    [pscustomobject]@{
-        SearchSamples = @($searchSamples)
-        VerificationSamples = @($verificationSamples)
-        AnalysisWindowCount = $windows.Count
-    }
+    [pscustomobject]@{ SearchSamples = @($searchSamples); VerificationSamples = @($verificationSamples); AnalysisWindowCount = $windows.Count }
 }
 
 Export-ModuleMember -Function Get-EOAnalysisWindows, Get-EOContentFeatures, Select-EOSamples
