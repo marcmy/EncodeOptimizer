@@ -17,7 +17,7 @@ Describe 'FFmpeg capability discovery' {
             $joined = $Arguments -join ' '
             switch -Regex ($joined) {
                 '^-version$' { return 'ffmpeg version 8.0-test Copyright' }
-                '^-encoders$' {
+                '-encoders$' {
                     return @'
 Encoders:
  V..... libx265              libx265 H.265 / HEVC
@@ -26,14 +26,14 @@ Encoders:
  A..... aac                  AAC
 '@
                 }
-                '^-decoders$' {
+                '-decoders$' {
                     return @'
 Decoders:
  VFS..D hevc                 HEVC (High Efficiency Video Coding)
  VFS..D h264                 H.264 / AVC
 '@
                 }
-                '^-filters$' {
+                '-filters$' {
                     return @'
 Filters:
  .. libvmaf           VV->V      Calculate the VMAF score.
@@ -42,10 +42,10 @@ Filters:
  .. xpsnr             VV->V      Calculate XPSNR.
 '@
                 }
-                '^-hwaccels$' {
+                '-hwaccels$' {
                     return "Hardware acceleration methods:`ncuda`nd3d11va`n"
                 }
-                '^-h encoder=hevc_nvenc$' {
+                '-h encoder=hevc_nvenc$' {
                     return @'
 Encoder hevc_nvenc [NVIDIA NVENC hevc encoder]:
   -preset            <int>        E..V....... Set the encoding preset
