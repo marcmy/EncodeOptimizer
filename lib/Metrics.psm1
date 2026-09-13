@@ -81,8 +81,8 @@ function Get-EOMetricPlan {
     $toneMapAvailable = $filters -contains 'zscale' -and $filters -contains 'tonemap'
     $advisoryToneMap = $null
     if ($isHdr -and $toneMapAvailable -and $filters -contains 'libvmaf') {
-        # Deterministic BT.2390-like SDR projection used only to make SDR-model VMAF
-        # directionally useful for HDR. Native high-bit-depth secondary metrics remain primary.
+        # Deterministic SDR projection used only to make SDR-model VMAF directionally useful.
+        # Native high-bit-depth secondary metrics remain authoritative for HDR.
         $advisoryToneMap = 'zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p10le'
     }
 
@@ -126,13 +126,13 @@ function Measure-EOMetricAggregate {
         foreach ($frame in $frames) { $allFrames.Add($frame) }
         $mean = Get-EOAverageMetric $frames 'Vmaf'
         $sampleAggregates.Add([pscustomobject]@{
-            Name      = [string](Get-EOPropertyValue $sample 'Name' '')
-            Start     = Get-EOPropertyValue $sample 'Start'
+            Name       = [string](Get-EOPropertyValue $sample 'Name' '')
+            Start      = Get-EOPropertyValue $sample 'Start'
             FrameCount = $frames.Count
-            MeanVmaf  = $mean
-            MeanXpsnr = Get-EOAverageMetric $frames 'Xpsnr'
-            MeanSsim  = Get-EOAverageMetric $frames 'Ssim'
-            MeanPsnr  = Get-EOAverageMetric $frames 'Psnr'
+            MeanVmaf   = $mean
+            MeanXpsnr  = Get-EOAverageMetric $frames 'Xpsnr'
+            MeanSsim   = Get-EOAverageMetric $frames 'Ssim'
+            MeanPsnr   = Get-EOAverageMetric $frames 'Psnr'
         })
     }
 
@@ -161,7 +161,7 @@ function Measure-EOMetricAggregate {
         MeanXpsnr       = Get-EOAverageMetric @($allFrames) 'Xpsnr'
         MeanSsim        = Get-EOAverageMetric @($allFrames) 'Ssim'
         MeanPsnr        = Get-EOAverageMetric @($allFrames) 'Psnr'
-        Samples          = @($sampleAggregates)
+        Samples         = @($sampleAggregates)
     }
 }
 
@@ -174,34 +174,65 @@ function Test-EOQualityPolicy {
 
     $failures = [System.Collections.Generic.List[string]]::new()
     $margins = [ordered]@{}
+    $role = [string](Get-EOPropertyValue $Aggregate 'VmafRole' 'Primary')
+    $authoritativeMetric = if ($role -eq 'Primary') { 'VMAF' } else { 'Secondary' }
 
-    foreach ($check in @(
-        @{ Name='MeanVmaf'; Label='Mean VMAF'; Threshold=[double]$Policy.MeanVmaf },
-        @{ Name='WorstSampleVmaf'; Label='Worst-sample VMAF'; Threshold=[double]$Policy.WorstSampleVmaf },
-        @{ Name='P05Vmaf'; Label='P05 VMAF'; Threshold=[double]$Policy.P05Vmaf }
-    )) {
-        $value = Get-EOPropertyValue $Aggregate $check.Name
-        if ($null -eq $value) {
-            $failures.Add("$($check.Label) unavailable")
-            $margins[$check.Name] = $null
-            continue
+    if ($role -eq 'Primary') {
+        foreach ($check in @(
+            @{ Name='MeanVmaf'; Label='Mean VMAF'; Threshold=[double]$Policy.MeanVmaf; Scale=1.0 },
+            @{ Name='WorstSampleVmaf'; Label='Worst-sample VMAF'; Threshold=[double]$Policy.WorstSampleVmaf; Scale=1.0 },
+            @{ Name='P05Vmaf'; Label='P05 VMAF'; Threshold=[double]$Policy.P05Vmaf; Scale=1.0 }
+        )) {
+            $value = Get-EOPropertyValue $Aggregate $check.Name
+            if ($null -eq $value) {
+                $failures.Add("$($check.Label) unavailable")
+                $margins[$check.Name] = $null
+                continue
+            }
+            $rawMargin = [double]$value - $check.Threshold
+            $margins[$check.Name] = $rawMargin * $check.Scale
+            if ($rawMargin -lt 0) { $failures.Add("$($check.Label) below policy by $([math]::Round(-$rawMargin,3))") }
         }
-        $margin = [double]$value - $check.Threshold
-        $margins[$check.Name] = $margin
-        if ($margin -lt 0) { $failures.Add("$($check.Label) below policy by $([math]::Round(-$margin,3))") }
+    } else {
+        $secondaryChecks = @(
+            @{ Name='MeanXpsnr'; Label='XPSNR'; Threshold=[double](Get-EOPropertyValue $Policy 'MinimumXpsnr' 45.0); Scale=1.0 },
+            @{ Name='MeanSsim'; Label='SSIM'; Threshold=[double](Get-EOPropertyValue $Policy 'MinimumSsim' 0.990); Scale=100.0 },
+            @{ Name='MeanPsnr'; Label='PSNR'; Threshold=[double](Get-EOPropertyValue $Policy 'MinimumPsnr' 45.0); Scale=1.0 }
+        )
+        $availableCount = 0
+        foreach ($check in $secondaryChecks) {
+            $value = Get-EOPropertyValue $Aggregate $check.Name
+            if ($null -eq $value) {
+                $margins[$check.Name] = $null
+                continue
+            }
+            $availableCount++
+            $rawMargin = [double]$value - $check.Threshold
+            $margins[$check.Name] = $rawMargin * $check.Scale
+            if ($rawMargin -lt 0) { $failures.Add("$($check.Label) below policy by $([math]::Round(-$rawMargin,4))") }
+        }
+        $minimumRequired = [int](Get-EOPropertyValue $Policy 'MinimumSecondaryMetrics' 2)
+        if ($availableCount -lt $minimumRequired) {
+            $failures.Add("Only $availableCount secondary quality metric(s) available; policy requires $minimumRequired.")
+        }
     }
 
     $secondaryAnomaly = [bool](Get-EOPropertyValue $Aggregate 'SeriousSecondaryAnomaly' $false)
     if ($secondaryAnomaly) { $failures.Add('Serious secondary-metric anomaly') }
 
-    $minimumMargin = @($margins.Values | Where-Object { $null -ne $_ }) | Measure-Object -Minimum
+    $marginValues = @($margins.Values | Where-Object { $null -ne $_ })
+    $minimumMargin = if ($marginValues.Count) { [double](($marginValues | Measure-Object -Minimum).Minimum) } else { $null }
+    $comfortableMargin = [double](Get-EOPropertyValue $Policy 'ComfortableMargin' 0.5)
+
     return [pscustomobject]@{
-        Passed           = ($failures.Count -eq 0)
-        Failures         = @($failures)
-        Margins          = [pscustomobject]$margins
-        MinimumMargin    = if ($minimumMargin.Count) { [double]$minimumMargin.Minimum } else { $null }
-        Comfortable      = ($failures.Count -eq 0 -and $null -ne $minimumMargin.Minimum -and [double]$minimumMargin.Minimum -ge [double](Get-EOPropertyValue $Policy 'ComfortableMargin' 0.5))
-        Authoritative    = ([string](Get-EOPropertyValue $Aggregate 'VmafRole' 'Primary') -eq 'Primary')
+        Passed              = ($failures.Count -eq 0)
+        Failures            = @($failures)
+        Margins             = [pscustomobject]$margins
+        MinimumMargin       = $minimumMargin
+        Comfortable         = ($failures.Count -eq 0 -and $null -ne $minimumMargin -and $minimumMargin -ge $comfortableMargin)
+        Authoritative       = ($failures.Count -eq 0)
+        AuthoritativeMetric = $authoritativeMetric
+        VmafRole            = $role
     }
 }
 
