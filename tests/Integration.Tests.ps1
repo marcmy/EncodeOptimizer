@@ -111,4 +111,46 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
             $env:LOCALAPPDATA = $oldLocalAppData
         }
     }
+
+    It 'runs recursive batch analysis with filtering, per-file output reports, and exact resume' {
+        $oldLocalAppData = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = Join-Path $script:root 'batch-localappdata'
+        $batchRoot = Join-Path $script:root 'batch-input'
+        $keepDirectory = Join-Path $batchRoot 'keep'
+        $skipDirectory = Join-Path $batchRoot 'skip'
+        $outputRoot = Join-Path $script:root 'batch-output'
+        New-Item -ItemType Directory -Path $keepDirectory -Force | Out-Null
+        New-Item -ItemType Directory -Path $skipDirectory -Force | Out-Null
+        Copy-Item -LiteralPath $script:source -Destination (Join-Path $keepDirectory 'episode.mp4')
+        Copy-Item -LiteralPath $script:source -Destination (Join-Path $skipDirectory 'ignored.mp4')
+
+        try {
+            $optimizer = Join-Path $repoRoot 'Optimize-Videos.ps1'
+            $common = @{
+                Path=$batchRoot; Recurse=$true; Include=@('*.mp4'); Exclude=@('skip\*'); OutputDirectory=$outputRoot
+                Profile='Aggressive'; Encoder='libx264'; GpuConcurrency=1; CpuConcurrency=1
+                FFmpegPath=$script:ffmpeg; FFprobePath=$script:ffprobe
+            }
+
+            $first = @(& $optimizer @common)
+            $first.Count | Should -Be 1
+            $first[0].Decision | Should -BeIn @('ENCODE','KEEP_SOURCE')
+            $first[0].BatchResume | Should -Not -BeNullOrEmpty
+            $first[0].BatchResume.Resumed | Should -BeFalse
+
+            $reportPath = Join-Path $outputRoot 'keep\episode.encodeoptimizer.json'
+            Test-Path -LiteralPath $reportPath -PathType Leaf | Should -BeTrue
+            $persisted = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json -Depth 100
+            [string]$persisted.BatchResume.Signature | Should -Not -BeNullOrEmpty
+            $persisted.BatchResume.OutputValidated | Should -BeFalse
+
+            $second = @(& $optimizer @common -Resume)
+            $second.Count | Should -Be 1
+            $second[0].BatchResume.Resumed | Should -BeTrue
+            $second[0].BatchResume.Signature | Should -BeExactly $persisted.BatchResume.Signature
+            $second[0].Source.Path | Should -Be ([IO.Path]::GetFullPath((Join-Path $keepDirectory 'episode.mp4')))
+        } finally {
+            $env:LOCALAPPDATA = $oldLocalAppData
+        }
+    }
 }
