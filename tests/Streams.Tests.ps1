@@ -85,6 +85,32 @@ Describe 'container and stream preservation' {
         $joined | Should -Not -Match '(^|\s)-r(\s|$)'
     }
 
+    It 'refuses to silently reduce 8-bit chroma from 4:2:2 to 4:2:0' {
+        $probe = New-StreamProbe -BitDepth 8 -PixelFormat 'yuv422p'
+        $encoder = [pscustomobject]@{
+            Name='libx264'; Codec='h264'; Hardware=$false; QualityOption='-crf'
+            PixelFormats=@('yuv420p'); Arguments=@('-preset','slow')
+        }
+        $container = [pscustomobject]@{ Container='mkv'; Extension='.mkv'; VideoTag=$null; Warnings=@() }
+        $stream = Get-EOStreamPlan -SourceProbe $probe -ContainerPlan $container
+
+        { New-EOFinalEncodeArguments -InputPath 'in.mkv' -OutputPath 'out.mkv' -SourceProbe $probe -EncoderProfile $encoder -ContainerPlan $container -StreamPlan $stream -Quality 16 } |
+            Should -Throw '*chroma*'
+    }
+
+    It 'refuses to silently reduce 10-bit chroma from 4:2:2 to p010 4:2:0' {
+        $probe = New-StreamProbe -BitDepth 10 -PixelFormat 'yuv422p10le'
+        $encoder = [pscustomobject]@{
+            Name='hevc_nvenc'; Codec='hevc'; Hardware=$true; QualityOption='-cq'
+            PixelFormats=@('yuv420p','p010le'); Arguments=@('-preset','p7')
+        }
+        $container = [pscustomobject]@{ Container='mkv'; Extension='.mkv'; VideoTag=$null; Warnings=@() }
+        $stream = Get-EOStreamPlan -SourceProbe $probe -ContainerPlan $container
+
+        { New-EOFinalEncodeArguments -InputPath 'in.mkv' -OutputPath 'out.mkv' -SourceProbe $probe -EncoderProfile $encoder -ContainerPlan $container -StreamPlan $stream -Quality 16 } |
+            Should -Throw '*chroma*'
+    }
+
     It 'inserts a sample seek window without collapsing argument tokens' {
         Get-Command Add-EOSampleWindowArguments -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         $base = @('-hide_banner','-i','input.mp4','-map','0:v:0','-c:v','libx264','-crf','18','output.mp4')
