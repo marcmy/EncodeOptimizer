@@ -14,20 +14,20 @@ function Get-EOExecutable {
             return (Resolve-Path -LiteralPath $ExplicitPath).Path
         }
 
-        $explicitCommand = Get-Command $ExplicitPath -CommandType Application -ErrorAction SilentlyContinue
-        if ($explicitCommand) {
-            return $explicitCommand.Source
+        $explicitCommands = @(Get-Command $ExplicitPath -CommandType Application -ErrorAction SilentlyContinue)
+        if ($explicitCommands.Count -gt 0) {
+            return [string]$explicitCommands[0].Source
         }
 
         throw "Unable to find executable '$ExplicitPath'."
     }
 
-    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $command) {
+    $commands = @(Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue)
+    if ($commands.Count -eq 0) {
         throw "Unable to find '$Name' on PATH. Install FFmpeg or provide an explicit path."
     }
 
-    return $command.Source
+    return [string]$commands[0].Source
 }
 
 function Invoke-EOTool {
