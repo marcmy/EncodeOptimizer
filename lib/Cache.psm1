@@ -27,8 +27,6 @@ function Get-EOSourceFingerprint {
     $size = [long]$item.Length
     $chunk = [math]::Max(65536, $ChunkBytes)
 
-    # Hash the complete file when it is small. For multi-gigabyte video, hash
-    # size + deterministic first/middle/last chunks so cache lookup stays cheap.
     if ($size -le (3L * $chunk)) {
         $hash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         return [pscustomobject]@{ Hash=$hash; Size=$size; Sampled=$false; Algorithm='SHA256-full-v1' }
@@ -131,17 +129,52 @@ function Read-EOHistory {
     catch { return @() }
 }
 
+function Get-EOHistoryMutexName {
+    param([Parameter(Mandatory)][string]$CacheRoot)
+    $canonical = [IO.Path]::GetFullPath($CacheRoot).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    if ([OperatingSystem]::IsWindows()) { $canonical = $canonical.ToUpperInvariant() }
+    return 'EncodeOptimizer.History.' + (Get-EOStringHash $canonical).Substring(0,32)
+}
+
+function Invoke-EOHistoryCriticalSection {
+    param(
+        [Parameter(Mandatory)][string]$CacheRoot,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [int]$TimeoutSeconds=30
+    )
+
+    $mutex = [Threading.Mutex]::new($false,(Get-EOHistoryMutexName $CacheRoot))
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds([math]::Max(1,$TimeoutSeconds)))
+        } catch [Threading.AbandonedMutexException] {
+            # The previous owner exited while holding the mutex. Ownership transfers
+            # to this thread, so the protected operation can safely continue.
+            $acquired = $true
+        }
+        if (-not $acquired) { throw "Timed out waiting for EncodeOptimizer history lock for '$CacheRoot'." }
+        return (& $ScriptBlock)
+    } finally {
+        if ($acquired) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
+}
+
 function Add-EOHistoryEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$CacheRoot,[Parameter(Mandatory)]$Entry,[int]$MaximumEntries=500)
-    $history = [System.Collections.Generic.List[object]]::new()
-    foreach ($existing in @(Read-EOHistory $CacheRoot)) { $history.Add($existing) }
-    $copy = [ordered]@{}
-    foreach ($property in $Entry.PSObject.Properties) { $copy[$property.Name] = $property.Value }
-    $copy.RecordedAt = [DateTimeOffset]::UtcNow.ToString('o')
-    $history.Add([pscustomobject]$copy)
-    while ($history.Count -gt [math]::Max(1,$MaximumEntries)) { $history.RemoveAt(0) }
-    Write-EOJsonAtomically -Path (Get-EOHistoryPath $CacheRoot) -Value @($history)
+
+    Invoke-EOHistoryCriticalSection -CacheRoot $CacheRoot -ScriptBlock {
+        $history = [System.Collections.Generic.List[object]]::new()
+        foreach ($existing in @(Read-EOHistory $CacheRoot)) { $history.Add($existing) }
+        $copy = [ordered]@{}
+        foreach ($property in $Entry.PSObject.Properties) { $copy[$property.Name] = $property.Value }
+        $copy.RecordedAt = [DateTimeOffset]::UtcNow.ToString('o')
+        $history.Add([pscustomobject]$copy)
+        while ($history.Count -gt [math]::Max(1,$MaximumEntries)) { $history.RemoveAt(0) }
+        Write-EOJsonAtomically -Path (Get-EOHistoryPath $CacheRoot) -Value @($history)
+    } | Out-Null
 }
 
 function Get-EOHistorySeed {
