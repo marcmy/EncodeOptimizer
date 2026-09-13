@@ -28,7 +28,7 @@ Describe 'automatic encoder policy' {
     It 'prefers HEVC NVENC for an HEVC source when available' {
         Get-Command Get-EOEncoderCandidates -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         $caps = New-TestCapabilities @('hevc_nvenc','libx265','h264_nvenc')
-        $result = Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'hevc') -Capabilities $caps
+        $result = @(Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'hevc') -Capabilities $caps)
         $result[0] | Should -Be 'hevc_nvenc'
         $result | Should -Contain 'libx265'
     }
@@ -36,7 +36,7 @@ Describe 'automatic encoder policy' {
     It 'falls back from an encoder that cannot preserve combined bit depth and chroma' {
         $caps = New-TestCapabilities @('hevc_nvenc','libx265')
         $probe = New-TestProbe 'hevc' 10 $false 'yuv422p10le'
-        $result = Get-EOEncoderCandidates -SourceProbe $probe -Capabilities $caps
+        $result = @(Get-EOEncoderCandidates -SourceProbe $probe -Capabilities $caps)
 
         $result[0] | Should -Be 'libx265'
         $result | Should -Not -Contain 'hevc_nvenc'
@@ -44,19 +44,19 @@ Describe 'automatic encoder policy' {
 
     It 'does not silently downgrade an AV1 source to HEVC' {
         $caps = New-TestCapabilities @('hevc_nvenc','libx265')
-        $result = Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'av1') -Capabilities $caps
+        $result = @(Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'av1') -Capabilities $caps)
         $result | Should -Be @('KEEP_SOURCE')
     }
 
     It 'does not select an HDR-unsafe H264 path for a 10-bit HDR source' {
         $caps = New-TestCapabilities @('h264_nvenc','libx264')
-        $result = Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'hevc' 10 $true 'yuv420p10le') -Capabilities $caps
+        $result = @(Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'hevc' 10 $true 'yuv420p10le') -Capabilities $caps)
         $result | Should -Be @('KEEP_SOURCE')
     }
 
     It 'honors an explicit encoder override when the encoder exists' {
         $caps = New-TestCapabilities @('hevc_nvenc','libx265')
-        $result = Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'hevc') -Capabilities $caps -Encoder 'libx265'
+        $result = @(Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'hevc') -Capabilities $caps -Encoder 'libx265')
         $result | Should -Be @('libx265')
     }
 
