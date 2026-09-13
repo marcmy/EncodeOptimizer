@@ -11,6 +11,21 @@ Describe 'FFmpeg capability discovery' {
         Get-Command Get-EOCapabilities -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
     }
 
+    It 'resolves the first executable deterministically when PATH contains multiple matches' {
+        InModuleScope Capability {
+            Mock Get-Command {
+                @(
+                    [pscustomobject]@{ Source = 'C:\first\ffmpeg.exe' },
+                    [pscustomobject]@{ Source = 'C:\second\ffmpeg.exe' }
+                )
+            } -ParameterFilter { $Name -eq 'ffmpeg' -and $CommandType -eq 'Application' }
+
+            $resolved = Get-EOExecutable -Name 'ffmpeg'
+            $resolved | Should -BeExactly 'C:\first\ffmpeg.exe'
+            $resolved | Should -BeOfType [string]
+        }
+    }
+
     It 'parses available encoders filters hardware acceleration and encoder options' {
         $runner = {
             param($Executable, [string[]]$Arguments)
