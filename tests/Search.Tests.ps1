@@ -68,6 +68,23 @@ Describe 'adaptive quality search' {
         $result.VerificationEvaluations[-1].Passed | Should -BeTrue
     }
 
+    It 'returns a stable schema when no tested setting passes' {
+        $encoder = New-TestEncoderProfile
+        $evaluator = {
+            param($Quality, $Samples, $Phase)
+            New-FakeResult -Quality $Quality -Passed:$false -Phase $Phase
+        }
+        $result = Find-EOOptimalQuality -EncoderProfile $encoder -Policy $profiles.Conservative -SearchSamples @('s1') -VerificationSamples @('v1') -Evaluator $evaluator -SourceBytes 100000000
+
+        $result.Decision | Should -Be 'KEEP_SOURCE'
+        foreach ($name in 'SelectedQuality','SearchEvaluations','VerificationEvaluations','AllEvaluations','FinalEvaluation','EstimatedBytes','SavingsRatio','MinimumSavingsRatio','Rationale','SearchStable','VerificationPassed') {
+            $result.PSObject.Properties.Name | Should -Contain $name
+        }
+        $result.FinalEvaluation | Should -BeNullOrEmpty
+        $result.EstimatedBytes | Should -BeNullOrEmpty
+        $result.VerificationPassed | Should -BeFalse
+    }
+
     It 'returns KEEP_SOURCE when measured savings are below policy and no transform requires an encode' {
         $encoder = New-TestEncoderProfile
         $evaluator = {
