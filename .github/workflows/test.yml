@@ -41,3 +41,49 @@ jobs:
           $config.Output.Verbosity = 'Detailed'
           $config.Run.Exit = $true
           Invoke-Pester -Configuration $config
+
+  integration:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify PowerShell version
+        shell: pwsh
+        run: |
+          $minimum = [version]'7.5.0'
+          if ($PSVersionTable.PSVersion -lt $minimum) {
+            throw "PowerShell $minimum or newer is required; runner has $($PSVersionTable.PSVersion)."
+          }
+
+      - name: Install Pester 5
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.6.1 -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Install FFmpeg Full
+        shell: pwsh
+        run: |
+          choco install ffmpeg-full --version=9.0.1 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Chocolatey ffmpeg-full install failed with exit code $LASTEXITCODE." }
+
+          $ffmpeg = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg-full\tools" -Recurse -Filter ffmpeg.exe -File | Select-Object -First 1
+          if (-not $ffmpeg) { throw 'ffmpeg.exe was not found after ffmpeg-full installation.' }
+          $bin = $ffmpeg.Directory.FullName
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $ffmpeg.FullName -hide_banner -version
+
+          $ffprobe = Join-Path $bin 'ffprobe.exe'
+          if (-not (Test-Path -LiteralPath $ffprobe)) { throw 'ffprobe.exe was not found next to ffmpeg.exe.' }
+          & $ffprobe -hide_banner -version
+
+      - name: Run integration tests
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Filter.Tag = @('Integration')
+          $config.Output.Verbosity = 'Detailed'
+          $config.Run.Exit = $true
+          Invoke-Pester -Configuration $config
