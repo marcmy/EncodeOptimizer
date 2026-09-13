@@ -5,8 +5,8 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
             Import-Module (Join-Path $repoRoot "lib\$moduleName.psm1") -Force
         }
 
-        $script:ffmpeg = (Get-Command ffmpeg -CommandType Application -ErrorAction Stop).Source
-        $script:ffprobe = (Get-Command ffprobe -CommandType Application -ErrorAction Stop).Source
+        $script:ffmpeg = Get-EOExecutable -Name 'ffmpeg'
+        $script:ffprobe = Get-EOExecutable -Name 'ffprobe'
         $script:capabilities = Get-EOCapabilities -FFmpegPath $script:ffmpeg
 
         if (@($script:capabilities.Encoders) -notcontains 'libx264') {
