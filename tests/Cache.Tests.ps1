@@ -73,4 +73,31 @@ Describe 'deterministic cache keys' {
             $seed | Should -Be 16
         } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
     }
+
+    It 'preserves every concurrent history addition from parallel batch workers' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('eo-history-race-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        try {
+            $baseline = 0..199 | ForEach-Object {
+                [pscustomobject]@{
+                    Encoder='libx265'; Codec='hevc'; ResolutionClass='1080p'; FpsClass='30'; BitDepth=8; HdrKind='SDR'
+                    SelectedQuality=16; Verified=$true; BaselineId=$_; RecordedAt=[DateTimeOffset]::UtcNow.ToString('o')
+                }
+            }
+            [IO.File]::WriteAllText((Join-Path $root 'history.json'),($baseline | ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+
+            0..23 | ForEach-Object -Parallel {
+                Import-Module $using:modulePath -Force
+                Add-EOHistoryEntry -CacheRoot $using:root -MaximumEntries 1000 -Entry ([pscustomobject]@{
+                    Encoder='libx265'; Codec='hevc'; ResolutionClass='1080p'; FpsClass='30'; BitDepth=8; HdrKind='SDR'
+                    SelectedQuality=16; Verified=$true; WorkerId=$_
+                })
+            } -ThrottleLimit 16
+
+            $history = @(Get-Content -LiteralPath (Join-Path $root 'history.json') -Raw | ConvertFrom-Json -Depth 20)
+            $workers = @($history | Where-Object { $null -ne $_.PSObject.Properties['WorkerId'] } | ForEach-Object { [int]$_.WorkerId } | Sort-Object -Unique)
+            $workers.Count | Should -Be 24
+            $history.Count | Should -Be 224
+        } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
