@@ -34,9 +34,9 @@ function Join-EOFilterChain {
 
 function ConvertTo-EOFilterPath {
     param([Parameter(Mandatory)][string]$Path)
-    $normalized = [IO.Path]::GetFullPath($Path).Replace('\\','/')
-    $normalized = $normalized -replace ':', '\\:'
-    $normalized = $normalized -replace "'", "\\'"
+    $normalized = [IO.Path]::GetFullPath($Path).Replace('\','/')
+    $normalized = $normalized -replace ':', '\:'
+    $normalized = $normalized.Replace("'", "\'")
     return $normalized
 }
 
