@@ -84,4 +84,13 @@ Describe 'container and stream preservation' {
         $joined | Should -Match '-color_trc smpte2084'
         $joined | Should -Not -Match '(^|\s)-r(\s|$)'
     }
+
+    It 'inserts a sample seek window without collapsing argument tokens' {
+        Get-Command Add-EOSampleWindowArguments -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        $base = @('-hide_banner','-i','input.mp4','-map','0:v:0','-c:v','libx264','-crf','18','output.mp4')
+        $result = @(Add-EOSampleWindowArguments -Arguments $base -Start 2 -Duration 10)
+
+        $result.Count | Should -Be 14
+        ($result -join '|') | Should -BeExactly '-hide_banner|-ss|2|-t|10|-i|input.mp4|-map|0:v:0|-c:v|libx264|-crf|18|output.mp4'
+    }
 }
