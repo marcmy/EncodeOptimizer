@@ -33,6 +33,15 @@ Describe 'automatic encoder policy' {
         $result | Should -Contain 'libx265'
     }
 
+    It 'falls back from an encoder that cannot preserve combined bit depth and chroma' {
+        $caps = New-TestCapabilities @('hevc_nvenc','libx265')
+        $probe = New-TestProbe 'hevc' 10 $false 'yuv422p10le'
+        $result = Get-EOEncoderCandidates -SourceProbe $probe -Capabilities $caps
+
+        $result[0] | Should -Be 'libx265'
+        $result | Should -Not -Contain 'hevc_nvenc'
+    }
+
     It 'does not silently downgrade an AV1 source to HEVC' {
         $caps = New-TestCapabilities @('hevc_nvenc','libx265')
         $result = Get-EOEncoderCandidates -SourceProbe (New-TestProbe 'av1') -Capabilities $caps
