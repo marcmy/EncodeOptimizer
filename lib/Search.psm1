@@ -173,6 +173,7 @@ function Find-EOOptimalQuality {
     $start = if ($null -ne $SeedQuality) { [int]$SeedQuality } else { [int](Get-EOSearchProperty $EncoderProfile 'DefaultStart' ([math]::Floor(($minimum+$maximum)/2))) }
     $start = [math]::Max($minimum, [math]::Min($maximum, $start))
     $maxEvals = [math]::Max(1, $MaxSearchEvaluations)
+    $requiredSavings = if ($null -ne $MinimumSavingsRatio) { [double]$MinimumSavingsRatio } else { [double](Get-EOSearchProperty $Policy 'MinimumSavingsRatio' 0.12) }
 
     $searchResults = [System.Collections.Generic.List[object]]::new()
     $searchCache = @{}
@@ -240,9 +241,13 @@ function Find-EOOptimalQuality {
             SearchEvaluations = @($searchResults)
             VerificationEvaluations = @()
             AllEvaluations = @($searchResults)
+            FinalEvaluation = $null
+            EstimatedBytes = $null
             SavingsRatio = $null
+            MinimumSavingsRatio = $requiredSavings
             Rationale = @($rationale)
             SearchStable = $false
+            VerificationPassed = $false
         }
     }
 
@@ -273,9 +278,13 @@ function Find-EOOptimalQuality {
             SearchEvaluations = @($searchResults)
             VerificationEvaluations = @($verificationResults)
             AllEvaluations = @($searchResults) + @($verificationResults)
+            FinalEvaluation = $null
+            EstimatedBytes = $null
             SavingsRatio = $null
+            MinimumSavingsRatio = $requiredSavings
             Rationale = @($rationale)
             SearchStable = $false
+            VerificationPassed = $false
         }
     }
 
@@ -288,7 +297,6 @@ function Find-EOOptimalQuality {
     if ($null -eq $estimatedBytes -and $searchCache.ContainsKey($selectedQuality)) { $estimatedBytes = Get-EOSearchProperty $searchCache[$selectedQuality] 'EstimatedBytes' }
     $savingsRatio = if ($SourceBytes -gt 0 -and $null -ne $estimatedBytes) { 1.0 - ([double]$estimatedBytes / [double]$SourceBytes) } else { $null }
 
-    $requiredSavings = if ($null -ne $MinimumSavingsRatio) { [double]$MinimumSavingsRatio } else { [double](Get-EOSearchProperty $Policy 'MinimumSavingsRatio' 0.12) }
     $decision = 'ENCODE'
     if (-not $TransformationRequired -and -not $ForceEncode -and $null -ne $savingsRatio -and $savingsRatio -lt $requiredSavings) {
         $decision = 'KEEP_SOURCE'
