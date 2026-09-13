@@ -87,24 +87,80 @@ function Get-EOStreamPlan {
     [pscustomobject]@{ Arguments = @($args); Warnings = @($warnings) }
 }
 
+function Get-EOPixelFormatCharacteristics {
+    param([Parameter(Mandatory)][string]$PixelFormat)
+
+    $format = $PixelFormat.ToLowerInvariant()
+    $chroma = 0
+    $depth = 0
+
+    if ($format -match '^yuvj?(420|422|444)p(?:(9|10|12|14|16)(?:le|be))?$') {
+        $chroma = switch ($Matches[1]) { '420' { 1 } '422' { 2 } '444' { 3 } }
+        $depth = if ($Matches[2]) { [int]$Matches[2] } else { 8 }
+    } elseif ($format -in @('nv12','nv21')) {
+        $chroma = 1; $depth = 8
+    } elseif ($format -eq 'nv16') {
+        $chroma = 2; $depth = 8
+    } elseif ($format -eq 'nv24') {
+        $chroma = 3; $depth = 8
+    } elseif ($format -match '^p([024])(10|12|16)(?:le|be)$') {
+        $chroma = switch ($Matches[1]) { '0' { 1 } '2' { 2 } '4' { 3 } }
+        $depth = [int]$Matches[2]
+    } else {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        PixelFormat = $format
+        BitDepth = $depth
+        ChromaRank = $chroma
+    }
+}
+
 function Get-EOOutputPixelFormat {
     param([Parameter(Mandatory)] $SourceProbe, [Parameter(Mandatory)] $EncoderProfile)
 
-    $sourceFormat = [string]$SourceProbe.Video.PixelFormat
-    $bitDepth = [int]$SourceProbe.Video.BitDepth
-    if ($bitDepth -gt 8) {
-        if ($EncoderProfile.Hardware) {
-            if (@($EncoderProfile.PixelFormats) -contains 'p010le') { return 'p010le' }
-            if (@($EncoderProfile.PixelFormats) -contains 'p016le') { return 'p016le' }
-        }
-        if (@($EncoderProfile.PixelFormats) -contains $sourceFormat) { return $sourceFormat }
-        if (@($EncoderProfile.PixelFormats) -contains 'yuv420p10le') { return 'yuv420p10le' }
-        throw "Encoder '$($EncoderProfile.Name)' cannot preserve the source bit depth/pixel format."
+    $sourceFormat = ([string]$SourceProbe.Video.PixelFormat).ToLowerInvariant()
+    $sourceBitDepth = [int]$SourceProbe.Video.BitDepth
+    $available = @($EncoderProfile.PixelFormats | ForEach-Object { ([string]$_).ToLowerInvariant() })
+
+    # Exact format support is always the least surprising and preserves both depth and chroma.
+    if ($available -contains $sourceFormat) { return $sourceFormat }
+
+    $sourceInfo = Get-EOPixelFormatCharacteristics -PixelFormat $sourceFormat
+    if ($null -eq $sourceInfo) {
+        throw "Encoder '$($EncoderProfile.Name)' cannot safely convert unknown source pixel format '$sourceFormat' without an exact supported match."
     }
 
-    if (@($EncoderProfile.PixelFormats) -contains $sourceFormat) { return $sourceFormat }
-    if (@($EncoderProfile.PixelFormats) -contains 'yuv420p') { return 'yuv420p' }
-    throw "Encoder '$($EncoderProfile.Name)' cannot safely represent source pixel format '$sourceFormat'."
+    $knownCandidates = [System.Collections.Generic.List[object]]::new()
+    foreach ($candidateFormat in $available) {
+        $info = Get-EOPixelFormatCharacteristics -PixelFormat $candidateFormat
+        if ($null -ne $info) { $knownCandidates.Add($info) }
+    }
+
+    $depthCapable = @($knownCandidates | Where-Object { [int]$_.BitDepth -ge $sourceBitDepth })
+    $chromaCapable = @($knownCandidates | Where-Object { [int]$_.ChromaRank -ge [int]$sourceInfo.ChromaRank })
+    $safe = @($knownCandidates | Where-Object {
+        [int]$_.BitDepth -ge $sourceBitDepth -and [int]$_.ChromaRank -ge [int]$sourceInfo.ChromaRank
+    })
+
+    if ($safe.Count -gt 0) {
+        # Prefer the smallest non-lossy representation: same chroma first, then closest bit depth.
+        $chosen = $safe | Sort-Object `
+            @{ Expression = { [int]$_.ChromaRank - [int]$sourceInfo.ChromaRank }; Ascending = $true }, `
+            @{ Expression = { [int]$_.BitDepth - $sourceBitDepth }; Ascending = $true }, `
+            @{ Expression = { [string]$_.PixelFormat }; Ascending = $true } | Select-Object -First 1
+        return [string]$chosen.PixelFormat
+    }
+
+    if ($depthCapable.Count -gt 0 -and @($depthCapable | Where-Object { [int]$_.ChromaRank -lt [int]$sourceInfo.ChromaRank }).Count -eq $depthCapable.Count) {
+        throw "Encoder '$($EncoderProfile.Name)' cannot preserve source chroma sampling for '$sourceFormat'; refusing a silent chroma reduction."
+    }
+    if ($chromaCapable.Count -gt 0 -and @($chromaCapable | Where-Object { [int]$_.BitDepth -lt $sourceBitDepth }).Count -eq $chromaCapable.Count) {
+        throw "Encoder '$($EncoderProfile.Name)' cannot preserve source bit depth $sourceBitDepth for '$sourceFormat'; refusing a bit depth reduction."
+    }
+
+    throw "Encoder '$($EncoderProfile.Name)' cannot preserve source bit depth and chroma sampling for '$sourceFormat'."
 }
 
 function Add-EOColorArguments {
