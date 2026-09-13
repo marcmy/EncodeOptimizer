@@ -8,6 +8,10 @@ param(
     [switch] $AutoEncode,
     [switch] $ForceEncode,
     [switch] $KeepSamples,
+    [switch] $AllowHdrAutoEncode,
+    [switch] $AllowInterlacedAutoEncode,
+    [switch] $AllowSecondaryMetricsAutoEncode,
+    [switch] $BatchMode,
     [string] $OutputPath,
     [string] $FFmpegPath,
     [string] $FFprobePath
@@ -16,7 +20,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$moduleNames = @('Capability','Probe','EncoderProfiles','Streams','Sampling','Metrics','Search','Cache','Reporting')
+$moduleNames = @('Capability','Probe','EncoderProfiles','Streams','Sampling','Metrics','Search','Cache','Reporting','Safety')
 foreach ($moduleName in $moduleNames) {
     Import-Module (Join-Path $PSScriptRoot "lib\$moduleName.psm1") -Force
 }
@@ -143,8 +147,18 @@ function Test-EOConfidenceRequirement {
     return [int]$rank[$Actual] -ge [int]$rank[$Required]
 }
 
+function Set-EOConfidenceCeiling {
+    param($Confidence,[string]$Ceiling)
+    $rank=@{ LOW=1; MEDIUM=2; HIGH=3 }
+    if ($rank.ContainsKey([string]$Ceiling) -and $rank[[string]$Confidence.Label] -gt $rank[[string]$Ceiling]) {
+        $Confidence.Label=[string]$Ceiling
+        $Confidence.Reasons=@($Confidence.Reasons) + "Safety policy caps confidence at $Ceiling."
+    }
+    return $Confidence
+}
+
 $inputItem = Get-Item -LiteralPath $Path -ErrorAction Stop
-if ($inputItem.PSIsContainer) { throw "Path must name a video file, not a directory. Use batch mode for directories." }
+if ($inputItem.PSIsContainer) { throw "Path must name a video file, not a directory. Use Optimize-Videos.ps1 for directories." }
 $inputPath = $inputItem.FullName
 
 $qualityProfiles = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'config\quality-profiles.psd1')
@@ -158,15 +172,11 @@ $sourceProbe = Get-EOSourceProbe -Path $inputPath -FFprobePath $resolvedFFprobe
 $warnings = [System.Collections.Generic.List[string]]::new()
 foreach ($warning in @($sourceProbe.Warnings)) { $warnings.Add([string]$warning) }
 
-if ($sourceProbe.Video.DolbyVision) {
-    $warnings.Add('Dolby Vision is safety-gated. Automatic transcoding is disabled unless a preservation-safe implementation is explicitly proven.')
-    if ($AutoEncode) { throw 'AutoEncode is blocked for Dolby Vision sources.' }
-}
-
 $candidateNames = @(Get-EOEncoderCandidates -SourceProbe $sourceProbe -Capabilities $capabilities -Encoder $Encoder -Codec $Codec)
 $transformationRequired = -not [string]::IsNullOrWhiteSpace($VideoFilter)
 if ($candidateNames.Count -eq 0 -or $candidateNames[0] -eq 'KEEP_SOURCE') {
     if ($transformationRequired) { throw 'No safe encoder is available for the requested transformation.' }
+    if ($AutoEncode) { throw 'AutoEncode refused because no safe automatic encoder candidate is available for this source.' }
     $emptySamples = [pscustomobject]@{ SearchSamples=@(); VerificationSamples=@() }
     $keepResult = [pscustomobject]@{ Decision='KEEP_SOURCE'; SelectedQuality=$null; SavingsRatio=$null; EstimatedBytes=$null; Rationale=@('No safe automatic encoder candidate is available for this source.'); AllEvaluations=@(); FinalEvaluation=$null }
     $confidence = [pscustomobject]@{ Label='HIGH'; Score=1.0; Reasons=@() }
@@ -185,6 +195,12 @@ $streamPlan = Get-EOStreamPlan -SourceProbe $sourceProbe -ContainerPlan $contain
 foreach ($warning in @($containerPlan.Warnings) + @($streamPlan.Warnings)) { $warnings.Add([string]$warning) }
 $metricPlan = Get-EOMetricPlan -SourceProbe $sourceProbe -Capabilities $capabilities -VideoFilter $VideoFilter
 foreach ($warning in @($metricPlan.Warnings)) { $warnings.Add([string]$warning) }
+$safetyGate = Get-EOSafetyGate -SourceProbe $sourceProbe -MetricPlan $metricPlan -AllowHdrAutoEncode:$AllowHdrAutoEncode -AllowInterlacedAutoEncode:$AllowInterlacedAutoEncode -AllowSecondaryMetricsAutoEncode:$AllowSecondaryMetricsAutoEncode
+foreach ($warning in @($safetyGate.Warnings)) { $warnings.Add([string]$warning) }
+foreach ($reason in @($safetyGate.Reasons)) { $warnings.Add("AutoEncode gate: $reason") }
+if ($AutoEncode -and -not $safetyGate.AutoEncodeAllowed) {
+    throw "AutoEncode refused by safety policy:`n - $(@($safetyGate.Reasons) -join "`n - ")"
+}
 
 $duration = [double]$sourceProbe.Format.Duration
 if ($duration -le 0) { $duration = [double]$sourceProbe.Video.Duration }
@@ -194,7 +210,7 @@ if ($sourceBytes -le 0) { $sourceBytes = [long]$inputItem.Length }
 
 $fingerprint = Get-EOSourceFingerprint -Path $inputPath
 $encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
-$policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumSavingsRatio) -join '|'
+$policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumXpsnr,$policy.MinimumSsim,$policy.MinimumPsnr,$policy.MinimumSavingsRatio) -join '|'
 $cacheRoot = Get-EODefaultCacheRoot
 $cacheKey = Get-EOCacheKey -SourceFingerprint $fingerprint -VideoFilter $VideoFilter -EncoderName $encoderName -EncoderSignature $encoderSignature -FFmpegVersion $capabilities.Version -PolicyName $Profile -PolicySignature $policySignature
 $workRoot = Join-Path (Join-Path $cacheRoot 'work') $cacheKey
@@ -241,7 +257,7 @@ $evaluator = {
     $policyDecision = Test-EOQualityPolicy -Aggregate $aggregate -Policy $policy
     $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $duration -AuxiliaryBitrateKbps $auxiliaryKbps
     return [pscustomobject]@{
-        Quality=$Quality; Phase=$Phase; Passed=$policyDecision.Passed; MinimumMargin=$policyDecision.MinimumMargin
+        Quality=$Quality; Phase=$Phase; Passed=$policyDecision.Passed; MinimumMargin=$policyDecision.MinimumMargin; AuthoritativeMetric=$policyDecision.AuthoritativeMetric
         MeanVmaf=$aggregate.MeanVmaf; WorstSampleVmaf=$aggregate.WorstSampleVmaf; P05Vmaf=$aggregate.P05Vmaf
         MeanXpsnr=$aggregate.MeanXpsnr; MeanSsim=$aggregate.MeanSsim; MeanPsnr=$aggregate.MeanPsnr
         EstimatedBytes=$sizeEstimate.EstimatedBytes; SizeEstimate=$sizeEstimate; SampleResults=@($metricSamples); Aggregate=$aggregate; Failures=@($policyDecision.Failures)
@@ -262,7 +278,7 @@ $reasonSet = @($samplePlan.SearchSamples.Reasons | ForEach-Object { $_ } | Where
 $coverageScore = [math]::Min(1.0, (@($samplePlan.SearchSamples).Count + @($samplePlan.VerificationSamples).Count) / 8.0)
 $diversityScore = [math]::Min(1.0, $reasonSet.Count / 6.0)
 $minimumMargin = if ($searchResult.FinalEvaluation) { [double]$searchResult.FinalEvaluation.MinimumMargin } else { -1.0 }
-$metricAgreement = if ($metricPlan.Metrics -contains 'vmaf' -and $metricPlan.Metrics.Count -ge 3) { 0.95 } elseif ($metricPlan.Metrics -contains 'vmaf') { 0.82 } else { 0.62 }
+$metricAgreement = if ($metricPlan.VmafRole -eq 'Primary' -and $metricPlan.Metrics.Count -ge 3) { 0.95 } elseif ($metricPlan.VmafRole -eq 'Primary') { 0.82 } elseif (@($metricPlan.Metrics | Where-Object { $_ -in @('xpsnr','ssim','psnr') }).Count -ge 3) { 0.82 } else { 0.68 }
 $edgeFlags = [System.Collections.Generic.List[string]]::new()
 if ($sourceProbe.Video.IsHdr) { $edgeFlags.Add('HDR') }
 if ($sourceProbe.Video.DolbyVision) { $edgeFlags.Add('DolbyVision') }
@@ -270,6 +286,7 @@ if ($sourceProbe.Video.IsVfr) { $edgeFlags.Add('VFR') }
 if ($sourceProbe.Video.IsInterlaced) { $edgeFlags.Add('Interlace') }
 if (-not $capabilities.HasVmaf) { $edgeFlags.Add('MissingVmaf') }
 $confidence = Get-EOConfidence -Coverage $coverageScore -Diversity $diversityScore -MinimumMargin $minimumMargin -MetricAgreement $metricAgreement -VerificationPassed:([bool]$searchResult.VerificationPassed) -SearchStable:([bool]$searchResult.SearchStable) -EdgeCaseFlags @($edgeFlags) -MetricConfidencePenalty ([double]$metricPlan.ConfidencePenalty)
+$confidence = Set-EOConfidenceCeiling -Confidence $confidence -Ceiling ([string]$safetyGate.ConfidenceCeiling)
 
 $finalOutputPath = $null
 $finalCommand = @()
@@ -306,10 +323,11 @@ if ($null -ne $searchResult.SelectedQuality -and $searchResult.VerificationPasse
 
 if ($AutoEncode) {
     if ($searchResult.Decision -ne 'ENCODE') { throw "AutoEncode refused because recommendation is $($searchResult.Decision)." }
-    if (-not (Test-EOConfidenceRequirement -Actual $confidence.Label -Required ([string]$policy.MinimumConfidence))) {
-        throw "AutoEncode refused: confidence '$($confidence.Label)' is below required '$($policy.MinimumConfidence)'."
+    if (-not $safetyGate.AutoEncodeAllowed) { throw "AutoEncode refused by safety policy: $(@($safetyGate.Reasons) -join '; ')" }
+    $requiredConfidence = if ($BatchMode) { [string]$policy.BatchAutoConfidence } else { [string]$policy.MinimumConfidence }
+    if (-not (Test-EOConfidenceRequirement -Actual $confidence.Label -Required $requiredConfidence)) {
+        throw "AutoEncode refused: confidence '$($confidence.Label)' is below required '$requiredConfidence'."
     }
-    if ($sourceProbe.Video.DolbyVision) { throw 'AutoEncode is blocked for Dolby Vision sources.' }
     if (-not $finalOutputPath) { throw 'No final output path was generated.' }
     if (Test-Path -LiteralPath $finalOutputPath) { throw "Refusing to overwrite existing output '$finalOutputPath'." }
 
