@@ -13,7 +13,7 @@ Describe 'Optimize-Video public CLI' {
 
     It 'defaults to Conservative analyze-only behavior' {
         $text = Get-Content -LiteralPath $scriptPath -Raw
-        $text | Should -Match "\[string\]\s*\$Profile\s*=\s*'Conservative'"
+        $text | Should -Match "\[string\]\s*`$Profile\s*=\s*'Conservative'"
         $text | Should -Match '\[switch\]\s*\$AutoEncode'
         $text | Should -Not -Match '\$AutoEncode\s*=\s*\$true'
     }
