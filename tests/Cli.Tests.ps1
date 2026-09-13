@@ -25,6 +25,11 @@ Describe 'Optimize-Video public CLI' {
         $text | Should -Match 'Move-Item'
         $text | Should -Not -Match 'Remove-Item\s+\$Path'
     }
+
+    It 'suppresses approved-verb warnings when importing internal modules' {
+        $text = Get-Content -LiteralPath $scriptPath -Raw
+        $text | Should -Match 'Import-Module[^\r\n]*-DisableNameChecking'
+    }
 }
 
 Describe 'encodeoptimizer PATH wrapper' {
