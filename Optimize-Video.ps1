@@ -106,16 +106,6 @@ function Get-EOSafeOutputPath {
     return $candidate
 }
 
-function Insert-EOSampleSeek {
-    param([string[]]$Arguments,[double]$Start,[double]$Duration)
-    $index = [Array]::IndexOf($Arguments,'-i')
-    if ($index -lt 0) { throw 'Generated FFmpeg arguments do not contain an input marker.' }
-    $prefix = if ($index -gt 0) { @($Arguments[0..($index-1)]) } else { @() }
-    $suffix = @($Arguments[$index..($Arguments.Count-1)])
-    $culture = [Globalization.CultureInfo]::InvariantCulture
-    return @($prefix + @('-ss',$Start.ToString($culture),'-t',$Duration.ToString($culture)) + $suffix)
-}
-
 function Test-EOOutputValidation {
     param($SourceProbe,$OutputProbe,$EncoderProfile)
     $failures = [System.Collections.Generic.List[string]]::new()
@@ -238,7 +228,7 @@ $evaluator = {
         $candidatePath = Join-Path $sampleDirectory ('candidate' + $containerPlan.Extension)
         $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
         $baseArgs = @(New-EOFinalEncodeArguments -InputPath $inputPath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -VideoFilter $VideoFilter)
-        $sampleArgs = Insert-EOSampleSeek -Arguments $baseArgs -Start ([double]$sample.Start) -Duration ([double]$sample.Duration)
+        $sampleArgs = @(Add-EOSampleWindowArguments -Arguments $baseArgs -Start ([double]$sample.Start) -Duration ([double]$sample.Duration))
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $sampleArgs -Description "candidate sample encode q$Quality" | Out-Null
 
         $metricDirectory = Join-Path $sampleDirectory 'metrics'
