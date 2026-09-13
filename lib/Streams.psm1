@@ -154,4 +154,24 @@ function New-EOFinalEncodeArguments {
     return @($args)
 }
 
-Export-ModuleMember -Function Get-EOContainerPlan, Get-EOStreamPlan, New-EOFinalEncodeArguments
+function Add-EOSampleWindowArguments {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][double]$Start,
+        [Parameter(Mandatory)][double]$Duration
+    )
+
+    $inputIndex = [Array]::IndexOf($Arguments, '-i')
+    if ($inputIndex -lt 0) { throw 'Generated FFmpeg arguments do not contain an input marker.' }
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -lt $inputIndex; $i++) { $result.Add([string]$Arguments[$i]) }
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $result.Add('-ss'); $result.Add($Start.ToString($culture))
+    $result.Add('-t'); $result.Add($Duration.ToString($culture))
+    for ($i = $inputIndex; $i -lt $Arguments.Count; $i++) { $result.Add([string]$Arguments[$i]) }
+    return $result.ToArray()
+}
+
+Export-ModuleMember -Function Get-EOContainerPlan, Get-EOStreamPlan, New-EOFinalEncodeArguments, Add-EOSampleWindowArguments
