@@ -111,6 +111,19 @@ Describe 'container and stream preservation' {
             Should -Throw '*chroma*'
     }
 
+    It 'refuses to silently reduce bit depth from 12-bit to a 10-bit fallback' {
+        $probe = New-StreamProbe -BitDepth 12 -PixelFormat 'yuv420p12le'
+        $encoder = [pscustomobject]@{
+            Name='libx265'; Codec='hevc'; Hardware=$false; QualityOption='-crf'
+            PixelFormats=@('yuv420p','yuv420p10le'); Arguments=@('-preset','slow')
+        }
+        $container = [pscustomobject]@{ Container='mkv'; Extension='.mkv'; VideoTag=$null; Warnings=@() }
+        $stream = Get-EOStreamPlan -SourceProbe $probe -ContainerPlan $container
+
+        { New-EOFinalEncodeArguments -InputPath 'in.mkv' -OutputPath 'out.mkv' -SourceProbe $probe -EncoderProfile $encoder -ContainerPlan $container -StreamPlan $stream -Quality 16 } |
+            Should -Throw '*bit depth*'
+    }
+
     It 'inserts a sample seek window without collapsing argument tokens' {
         Get-Command Add-EOSampleWindowArguments -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         $base = @('-hide_banner','-i','input.mp4','-map','0:v:0','-c:v','libx264','-crf','18','output.mp4')
