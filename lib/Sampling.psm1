@@ -132,6 +132,18 @@ function New-EOSampleObject {
     }
 }
 
+function Test-EOWindowOverlapsSamples {
+    param([Parameter(Mandatory)]$Window,[Parameter(Mandatory)][object[]]$Samples)
+    $windowStart=[double]$Window.Start
+    $windowEnd=$windowStart+[double]$Window.Duration
+    foreach($sample in $Samples) {
+        $sampleStart=[double]$sample.Start
+        $sampleEnd=$sampleStart+[double]$sample.Duration
+        if($windowStart -lt $sampleEnd -and $sampleStart -lt $windowEnd) { return $true }
+    }
+    return $false
+}
+
 function Select-EOSamples {
     [CmdletBinding()]
     param(
@@ -163,13 +175,11 @@ function Select-EOSamples {
         if (-not $reasonMap[$key].Contains($Reason)) { $reasonMap[$key].Add($Reason) }
     }
 
-    # Explicit difficult categories take priority so an important scene cannot be crowded out by generic anchors.
     foreach ($feature in @('Motion','Detail','Noise','Dark','Gradient','Scene')) {
         $candidate = $usable | Sort-Object @{ Expression = { Get-EOFeatureValue $_ $feature }; Descending = $true }, @{ Expression = { Get-EOSampleScore $_ }; Descending = $true }, Start | Select-Object -First 1
         if ($candidate -and (Get-EOFeatureValue $candidate $feature) -ge 0.5) { Add-SearchWindow $candidate $feature.ToLowerInvariant() }
     }
 
-    # Add timeline anchors only after known hard categories are represented.
     Add-SearchWindow ($usable | Select-Object -First 1) 'temporal'
     Add-SearchWindow ($usable | Select-Object -Last 1) 'temporal'
 
@@ -182,8 +192,14 @@ function Select-EOSamples {
     $remaining = @($windows | Where-Object { $searchStarts -notcontains [double]$_.Start })
     $verifyRanked = @($remaining | Sort-Object @{ Expression = { (Get-EOSampleScore $_) - 1.5*(Get-EOFeatureValue $_ 'Black') - 0.8*(Get-EOFeatureValue $_ 'Static') }; Descending = $true }, Start)
 
+    # Independent verification should not share frames with adaptive-search clips when
+    # the timeline offers enough alternatives. Short/dense sources may have no such
+    # windows, so overlap is retained only as a last-resort fallback rather than
+    # silently reducing verification count to zero.
+    $independent = @($verifyRanked | Where-Object { -not (Test-EOWindowOverlapsSamples -Window $_ -Samples $searchSamples) })
+    $overlapping = @($verifyRanked | Where-Object { Test-EOWindowOverlapsSamples -Window $_ -Samples $searchSamples })
     $verificationSamples = [System.Collections.Generic.List[object]]::new()
-    foreach ($candidate in $verifyRanked) {
+    foreach ($candidate in @($independent + $overlapping)) {
         if ($verificationSamples.Count -ge $targetVerify) { break }
         $verificationSamples.Add((New-EOSampleObject -Window $candidate -Duration $Duration -Reasons @('verification')))
     }
