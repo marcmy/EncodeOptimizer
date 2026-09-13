@@ -22,6 +22,14 @@ Describe 'source-relative metric planning' {
         }
     }
 
+    It 'escapes Windows metric log paths for FFmpeg filter options' {
+        InModuleScope Metrics {
+            $escaped = ConvertTo-EOFilterPath 'C:\metrics work\vmaf.json'
+            $escaped | Should -BeExactly 'C\:/metrics work/vmaf.json'
+            $escaped | Should -Not -Match '\\\\'
+        }
+    }
+
     It 'applies the requested user transform to both reference and encode paths exactly once' {
         $source = [pscustomobject]@{ Video = [pscustomobject]@{ IsHdr = $false; BitDepth = 8; PixelFormat = 'yuv420p'; Width = 1280; Height = 720; IsVfr = $false } }
         $caps = [pscustomobject]@{ Filters = @('libvmaf','xpsnr','ssim','psnr') }
