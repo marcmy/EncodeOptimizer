@@ -69,7 +69,7 @@ Describe 'container and stream preservation' {
         $probe.Video.ColorPrimaries = 'bt2020'
         $encoder = [pscustomobject]@{
             Name = 'hevc_nvenc'; Codec = 'hevc'; Hardware = $true; QualityOption = '-cq';
-            Arguments = @('-preset','p7','-tune','hq')
+            PixelFormats = @('yuv420p','p010le'); Arguments = @('-preset','p7','-tune','hq')
         }
         $container = [pscustomobject]@{ Container = 'mp4'; Extension = '.mp4'; VideoTag = 'hvc1'; Warnings = @() }
         $stream = Get-EOStreamPlan -SourceProbe $probe -ContainerPlan $container
