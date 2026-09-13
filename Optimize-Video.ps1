@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 
 $moduleNames = @('Capability','Probe','EncoderProfiles','Streams','Sampling','Metrics','Search','Cache','Reporting','Safety')
 foreach ($moduleName in $moduleNames) {
-    Import-Module (Join-Path $PSScriptRoot "lib\$moduleName.psm1") -Force
+    Import-Module (Join-Path $PSScriptRoot "lib\$moduleName.psm1") -Force -DisableNameChecking
 }
 
 function Invoke-EOExternalCommand {
