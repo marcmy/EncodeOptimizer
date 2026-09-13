@@ -27,7 +27,7 @@ function Get-EOMediaFiles {
 function New-EOBatchPlan {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][object[]]$Items,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items,
         [int]$GpuConcurrency=2,
         [int]$CpuConcurrency=1
     )
