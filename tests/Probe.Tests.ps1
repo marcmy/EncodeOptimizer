@@ -45,4 +45,44 @@ Describe 'ffprobe normalization' {
         $probe.Subtitles.Count | Should -Be 1
         $probe.Chapters.Count | Should -Be 1
     }
+
+    It 'uses a Matroska stream DURATION tag when stream duration is unavailable' {
+        $json = @'
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "pix_fmt": "yuv420p",
+      "r_frame_rate": "60000/1001",
+      "avg_frame_rate": "60000/1001",
+      "time_base": "1/1000",
+      "tags": {
+        "DURATION": "00:00:10.411000000"
+      }
+    },
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "tags": {
+        "DURATION": "00:00:20.021000000"
+      }
+    }
+  ],
+  "format": {
+    "format_name": "matroska,webm",
+    "duration": "20.021000",
+    "size": "1000000"
+  }
+}
+'@
+
+        $probe = ConvertFrom-EOFFprobeJson -Json $json -Path 'duration-tag.mkv'
+
+        $probe.Format.Duration | Should -Be 20.021
+        $probe.Video.Duration | Should -BeGreaterThan 10.4109
+        $probe.Video.Duration | Should -BeLessThan 10.4111
+    }
 }

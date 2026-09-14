@@ -125,14 +125,23 @@ function Measure-EOMetricAggregate {
         $frames = @((Get-EOPropertyValue $sample 'Frames' @()))
         foreach ($frame in $frames) { $allFrames.Add($frame) }
         $mean = Get-EOAverageMetric $frames 'Vmaf'
+        $sampleVmaf = @($frames | ForEach-Object {
+            $value = Get-EOPropertyValue $_ 'Vmaf'
+            if ($null -ne $value) { [double]$value }
+        })
         $sampleAggregates.Add([pscustomobject]@{
-            Name       = [string](Get-EOPropertyValue $sample 'Name' '')
-            Start      = Get-EOPropertyValue $sample 'Start'
-            FrameCount = $frames.Count
-            MeanVmaf   = $mean
-            MeanXpsnr  = Get-EOAverageMetric $frames 'Xpsnr'
-            MeanSsim   = Get-EOAverageMetric $frames 'Ssim'
-            MeanPsnr   = Get-EOAverageMetric $frames 'Psnr'
+            Name           = [string](Get-EOPropertyValue $sample 'Name' '')
+            Start          = Get-EOPropertyValue $sample 'Start'
+            Duration       = Get-EOPropertyValue $sample 'Duration'
+            FrameCount     = $frames.Count
+            MeanVmaf       = $mean
+            MinimumVmaf    = if ($sampleVmaf.Count) { [double](($sampleVmaf | Measure-Object -Minimum).Minimum) } else { $null }
+            P05Vmaf        = if ($sampleVmaf.Count) { Get-EOPercentile $sampleVmaf 0.05 } else { $null }
+            MeanXpsnr      = Get-EOAverageMetric $frames 'Xpsnr'
+            MeanSsim       = Get-EOAverageMetric $frames 'Ssim'
+            MeanPsnr       = Get-EOAverageMetric $frames 'Psnr'
+            CandidateBytes = Get-EOPropertyValue $sample 'CandidateBytes'
+            CandidateKbps  = Get-EOPropertyValue $sample 'CandidateKbps'
         })
     }
 

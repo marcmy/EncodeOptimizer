@@ -85,6 +85,33 @@ Describe 'container and stream preservation' {
         $joined | Should -Not -Match '(^|\s)-r(\s|$)'
     }
 
+    It 'preserves source frame timestamps on final encodes' {
+        $probe = New-StreamProbe
+        $encoder = [pscustomobject]@{
+            Name = 'hevc_nvenc'; Codec = 'hevc'; Hardware = $true; QualityOption = '-cq';
+            PixelFormats = @('yuv420p'); Arguments = @('-preset','p7')
+        }
+        $container = [pscustomobject]@{ Container = 'mkv'; Extension = '.mkv'; VideoTag = $null; Warnings = @() }
+        $stream = [pscustomobject]@{ Arguments = @('-map','0:v:0'); Warnings = @() }
+
+        $args = @(New-EOFinalEncodeArguments -InputPath 'in.mkv' -OutputPath 'out.mkv' -SourceProbe $probe -EncoderProfile $encoder -ContainerPlan $container -StreamPlan $stream -Quality 18)
+
+        ($args -join '|') | Should -Match '\|-fps_mode\|passthrough\|out\.mkv$'
+    }
+
+    It 'uses analysis-specific encoder arguments for temporary search candidates' {
+        $probe = New-StreamProbe
+        $encoder = [pscustomobject]@{
+            Name='hevc_nvenc'; Codec='hevc'; Hardware=$true; QualityOption='-cq'
+            PixelFormats=@('yuv420p'); Arguments=@('-preset','p7'); AnalysisArguments=@('-preset','p7','-level','6.2','-tier','high')
+        }
+        $container = [pscustomobject]@{ Container='mkv'; Extension='.mkv'; VideoTag=$null; Warnings=@() }
+        $stream = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
+
+        $args = @(New-EOFinalEncodeArguments -InputPath 'in.mkv' -OutputPath 'out.mkv' -SourceProbe $probe -EncoderProfile $encoder -ContainerPlan $container -StreamPlan $stream -Quality 18 -Analysis)
+        ($args -join '|') | Should -Match '\|-level\|6\.2\|-tier\|high(?:\||$)'
+    }
+
     It 'refuses to silently reduce 8-bit chroma from 4:2:2 to 4:2:0' {
         $probe = New-StreamProbe -BitDepth 8 -PixelFormat 'yuv422p'
         $encoder = [pscustomobject]@{

@@ -4,9 +4,22 @@ BeforeAll {
     $profiles = Import-PowerShellDataFile (Join-Path $PSScriptRoot '..\config\quality-profiles.psd1')
 
     function New-MetricSample {
-        param([string]$Name, [double[]]$Vmaf, [double]$Xpsnr = 48.0, [double]$Ssim = 0.993, [double]$Psnr = 49.0)
+        param(
+            [string]$Name,
+            [double[]]$Vmaf,
+            [double]$Xpsnr = 48.0,
+            [double]$Ssim = 0.993,
+            [double]$Psnr = 49.0,
+            [double]$Start = 0.0,
+            [double]$Duration = 10.0,
+            [double]$CandidateKbps = 1234.5
+        )
         [pscustomobject]@{
             Name = $Name
+            Start = $Start
+            Duration = $Duration
+            CandidateBytes = [long]($CandidateKbps * $Duration * 1000.0 / 8.0)
+            CandidateKbps = $CandidateKbps
             Frames = @($Vmaf | ForEach-Object {
                 [pscustomobject]@{ Vmaf = [double]$_; Xpsnr = $Xpsnr; Ssim = $Ssim; Psnr = $Psnr }
             })
@@ -79,6 +92,10 @@ Describe 'metric aggregation and quality policy' {
         $agg.P10Vmaf | Should -BeGreaterOrEqual 98.0
         $agg.WorstSampleVmaf | Should -Be 97.8
         $agg.WorstSampleName | Should -Be 'hard'
+        $hard = @($agg.Samples | Where-Object Name -eq 'hard')[0]
+        $hard.FrameCount | Should -Be 50
+        $hard.P05Vmaf | Should -Be 96.0
+        $hard.CandidateKbps | Should -Be 1234.5
     }
 
     It 'tolerates one pathological frame when mean worst-sample and P05 remain healthy' {

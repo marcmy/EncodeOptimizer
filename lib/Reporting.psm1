@@ -49,22 +49,31 @@ function New-EOReport {
     if ($null -ne $SizeEstimate) { $estimatedBytes = Get-EOReportProperty $SizeEstimate 'EstimatedBytes' $estimatedBytes }
 
     $candidateRows = @((Get-EOReportProperty $SearchResult 'AllEvaluations' @()) | ForEach-Object {
+        $aggregate = Get-EOReportProperty $_ 'Aggregate'
+        $sampleRows = @((Get-EOReportProperty $aggregate 'Samples' @()) | ForEach-Object {
+            [pscustomobject]@{
+                Name=[string](Get-EOReportProperty $_ 'Name' ''); Start=Get-EOReportProperty $_ 'Start'; Duration=Get-EOReportProperty $_ 'Duration'
+                FrameCount=[int](Get-EOReportProperty $_ 'FrameCount' 0); MeanVmaf=Get-EOReportProperty $_ 'MeanVmaf'; P05Vmaf=Get-EOReportProperty $_ 'P05Vmaf'
+                MinimumVmaf=Get-EOReportProperty $_ 'MinimumVmaf'; MeanXpsnr=Get-EOReportProperty $_ 'MeanXpsnr'; MeanSsim=Get-EOReportProperty $_ 'MeanSsim'; MeanPsnr=Get-EOReportProperty $_ 'MeanPsnr'
+                CandidateBytes=Get-EOReportProperty $_ 'CandidateBytes'; CandidateKbps=Get-EOReportProperty $_ 'CandidateKbps'
+            }
+        })
         [pscustomobject]@{
             Phase=Get-EOReportProperty $_ 'Phase'; Quality=Get-EOReportProperty $_ 'Quality'; Passed=[bool](Get-EOReportProperty $_ 'Passed' $false)
             MeanVmaf=Get-EOReportProperty $_ 'MeanVmaf'; WorstSampleVmaf=Get-EOReportProperty $_ 'WorstSampleVmaf'; P05Vmaf=Get-EOReportProperty $_ 'P05Vmaf'
-            MinimumMargin=Get-EOReportProperty $_ 'MinimumMargin'; EstimatedBytes=Get-EOReportProperty $_ 'EstimatedBytes'
+            MinimumMargin=Get-EOReportProperty $_ 'MinimumMargin'; EstimatedBytes=Get-EOReportProperty $_ 'EstimatedBytes'; Samples=$sampleRows
         }
     })
 
     $selected = if ($null -ne $selectedQuality) { [pscustomobject]@{ Quality=[int]$selectedQuality; Metrics=$selectedEval } } else { $null }
     $commandArguments = @($FinalCommand)
     [pscustomobject]@{
-        SchemaVersion=1; GeneratedAt=[DateTimeOffset]::UtcNow.ToString('o'); Decision=[string](Get-EOReportProperty $SearchResult 'Decision' 'UNKNOWN'); Profile=$ProfileName
+        SchemaVersion=2; GeneratedAt=[DateTimeOffset]::UtcNow.ToString('o'); Decision=[string](Get-EOReportProperty $SearchResult 'Decision' 'UNKNOWN'); Profile=$ProfileName
         Source=[pscustomobject]@{
             Path=[string](Get-EOReportProperty $SourceProbe 'Path' ''); SizeBytes=$size; Duration=$duration
             Video=[pscustomobject]@{
                 Codec=[string](Get-EOReportProperty $video 'CodecName' ''); Profile=[string](Get-EOReportProperty $video 'Profile' '')
-                Resolution="$(Get-EOReportProperty $video 'Width' 0)x$(Get-EOReportProperty $video 'Height' 0)"; Width=[int](Get-EOReportProperty $video 'Width' 0); Height=[int](Get-EOReportProperty $video 'Height' 0)
+                Resolution="$(Get-EOReportProperty $video 'Width' 0)x$(Get-EOReportProperty $video 'Height' 0)"; Width=[int](Get-EOReportProperty $video 'Width' 0); Height=[int](Get-EOReportProperty $video 'Height' 0); Duration=[double](Get-EOReportProperty $video 'Duration' 0.0)
                 Fps=[double](Get-EOReportProperty $video 'FrameRate' 0.0); BitDepth=[int](Get-EOReportProperty $video 'BitDepth' 0); PixelFormat=[string](Get-EOReportProperty $video 'PixelFormat' '')
                 HdrKind=[string](Get-EOReportProperty $video 'HdrKind' 'SDR'); IsVfr=[bool](Get-EOReportProperty $video 'IsVfr' $false)
             }

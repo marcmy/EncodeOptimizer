@@ -5,6 +5,31 @@ function Limit-EOUnit {
     return [math]::Max(0.0, [math]::Min(1.0, $Value))
 }
 
+function Get-EOSamplingDuration {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $SourceProbe)
+
+    $video = $SourceProbe.Video
+    $format = $SourceProbe.Format
+    $videoDuration = if ($video -and $video.PSObject.Properties['Duration']) { [double]$video.Duration } else { 0.0 }
+    $formatDuration = if ($format -and $format.PSObject.Properties['Duration']) { [double]$format.Duration } else { 0.0 }
+
+    if ($videoDuration -gt 0) {
+        if ($formatDuration -gt 0) { return [math]::Min($videoDuration, $formatDuration) }
+        return $videoDuration
+    }
+
+    $frameCount = if ($video -and $video.PSObject.Properties['FrameCount']) { [long]$video.FrameCount } else { 0 }
+    $frameRate = if ($video -and $video.PSObject.Properties['FrameRate']) { [double]$video.FrameRate } else { 0.0 }
+    if ($frameCount -gt 0 -and $frameRate -gt 0) {
+        $frameDuration = $frameCount / $frameRate
+        if ($formatDuration -gt 0) { return [math]::Min($frameDuration, $formatDuration) }
+        return $frameDuration
+    }
+
+    return $formatDuration
+}
+
 function Get-EOAnalysisWindows {
     [CmdletBinding()]
     param(
@@ -211,4 +236,4 @@ function Select-EOSamples {
     [pscustomobject]@{ SearchSamples = @($searchSamples); VerificationSamples = @($verificationSamples); AnalysisWindowCount = $windows.Count }
 }
 
-Export-ModuleMember -Function Get-EOAnalysisWindows, Get-EOContentFeatures, Select-EOSamples
+Export-ModuleMember -Function Get-EOSamplingDuration, Get-EOAnalysisWindows, Get-EOContentFeatures, Select-EOSamples

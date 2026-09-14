@@ -193,25 +193,30 @@ if ($AutoEncode -and -not $safetyGate.AutoEncodeAllowed) {
     throw "AutoEncode refused by safety policy:`n - $(@($safetyGate.Reasons) -join "`n - ")"
 }
 
-$duration = [double]$sourceProbe.Format.Duration
-if ($duration -le 0) { $duration = [double]$sourceProbe.Video.Duration }
-if ($duration -le 0) { throw 'Unable to determine source duration.' }
+$containerDuration = [double]$sourceProbe.Format.Duration
+$samplingDuration = Get-EOSamplingDuration -SourceProbe $sourceProbe
+if ($samplingDuration -le 0) { throw 'Unable to determine primary video duration.' }
+if ($containerDuration -le 0) { $containerDuration = $samplingDuration }
+$durationDeltaTolerance = if ([double]$sourceProbe.Video.FrameRate -gt 0) { [math]::Max(0.05, 2.0 / [double]$sourceProbe.Video.FrameRate) } else { 0.05 }
+if (($containerDuration - $samplingDuration) -gt $durationDeltaTolerance) {
+    $warnings.Add("Primary video ends $([math]::Round($containerDuration - $samplingDuration,3))s before the container timeline; analysis and quality sampling use the video duration.")
+}
 $sourceBytes = [long]$sourceProbe.Format.Size
 if ($sourceBytes -le 0) { $sourceBytes = [long]$inputItem.Length }
 
 $fingerprint = Get-EOSourceFingerprint -Path $inputPath
-$pipelineVersion = 'deterministic-reference-v2'
-$encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
+$pipelineVersion = 'deterministic-reference-v6-nvenc-search-headroom'
+$encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.AnalysisArguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
 $policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumXpsnr,$policy.MinimumSsim,$policy.MinimumPsnr,$policy.MinimumSavingsRatio) -join '|'
 $cacheRoot = Get-EODefaultCacheRoot
 $cacheKey = Get-EOCacheKey -SourceFingerprint $fingerprint -VideoFilter $VideoFilter -EncoderName $encoderName -EncoderSignature $encoderSignature -FFmpegVersion $capabilities.Version -PolicyName $Profile -PolicySignature $policySignature -PipelineVersion $pipelineVersion
 $workRoot = Join-Path (Join-Path $cacheRoot 'work') $cacheKey
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 
-$analysisWindows = Get-EOAnalysisWindows -Duration $duration
+$analysisWindows = Get-EOAnalysisWindows -Duration $samplingDuration
 Write-Host "Analyzing content complexity ($($analysisWindows.Count) windows)..."
 $features = Get-EOContentFeatures -Path $inputPath -AnalysisWindows $analysisWindows -FFmpegPath $resolvedFFmpeg
-$samplePlan = Select-EOSamples -FeatureWindows $features -Duration $duration
+$samplePlan = Select-EOSamples -FeatureWindows $features -Duration $samplingDuration
 
 if (@($capabilities.Encoders) -notcontains 'ffv1') {
     throw 'FFmpeg does not expose the lossless FFV1 encoder required for deterministic reference samples.'
@@ -258,7 +263,7 @@ $evaluator = {
         $candidatePath = Join-Path $sampleDirectory ('candidate' + $containerPlan.Extension)
         $referencePath = $referencePaths[$Phase][$sampleIndex - 1]
         $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
-        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $videoOnly -Quality ([int]$Quality))
+        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -Analysis)
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $candidateArgs -Description "candidate sample encode q$Quality" | Out-Null
 
         $metricDirectory = Join-Path $sampleDirectory 'metrics'
@@ -276,7 +281,7 @@ $evaluator = {
 
     $aggregate = Measure-EOMetricAggregate -Samples @($metricSamples) -VmafRole $sampleMetricPlan.VmafRole
     $policyDecision = Test-EOQualityPolicy -Aggregate $aggregate -Policy $policy
-    $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $duration -PopulationComplexities $populationComplexities -AuxiliaryBitrateKbps $auxiliaryKbps
+    $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $containerDuration -PopulationComplexities $populationComplexities -AuxiliaryBitrateKbps $auxiliaryKbps
     return [pscustomobject]@{
         Quality=$Quality; Phase=$Phase; Passed=$policyDecision.Passed; MinimumMargin=$policyDecision.MinimumMargin; AuthoritativeMetric=$policyDecision.AuthoritativeMetric
         MeanVmaf=$aggregate.MeanVmaf; WorstSampleVmaf=$aggregate.WorstSampleVmaf; P05Vmaf=$aggregate.P05Vmaf
@@ -313,9 +318,24 @@ $confidence = Set-EOConfidenceCeiling -Confidence $confidence -Ceiling ([string]
 $finalOutputPath = $null
 $finalCommand = @()
 $alternatives = $null
+$finalEncoderProfile = $encoderProfile
 if ($searchResult.Decision -eq 'ENCODE' -and $null -ne $searchResult.SelectedQuality) {
+    $selectedSampleKbps = @(
+        $searchResult.AllEvaluations |
+            Where-Object { [int]$_.Quality -eq [int]$searchResult.SelectedQuality } |
+            ForEach-Object { @($_.SampleResults) } |
+            ForEach-Object { if ($null -ne $_.CandidateKbps) { [double]$_.CandidateKbps } }
+    )
+    $requiredVideoKbps = if ($selectedSampleKbps.Count) {
+        [double](($selectedSampleKbps | Measure-Object -Maximum).Maximum)
+    } elseif ($finalSizeEstimate -and $null -ne $finalSizeEstimate.VideoKbps) {
+        [double]$finalSizeEstimate.VideoKbps
+    } else {
+        0.0
+    }
+    $finalEncoderProfile = Resolve-EOFinalEncoderProfile -EncoderProfile $encoderProfile -SourceProbe $sourceProbe -RequiredVideoKbps $requiredVideoKbps
     $finalOutputPath = Get-EOSafeOutputPath -InputPath $inputPath -RequestedPath $OutputPath -Extension $containerPlan.Extension
-    $finalCommand = @($resolvedFFmpeg) + @(New-EOFinalEncodeArguments -InputPath $inputPath -OutputPath $finalOutputPath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $streamPlan -Quality ([int]$searchResult.SelectedQuality) -VideoFilter $VideoFilter)
+    $finalCommand = @($resolvedFFmpeg) + @(New-EOFinalEncodeArguments -InputPath $inputPath -OutputPath $finalOutputPath -SourceProbe $sourceProbe -EncoderProfile $finalEncoderProfile -ContainerPlan $containerPlan -StreamPlan $streamPlan -Quality ([int]$searchResult.SelectedQuality) -VideoFilter $VideoFilter)
     $selected = [int]$searchResult.SelectedQuality
     $safer = if ($encoderProfile.BetterDirection -eq 'Lower') { $selected-1 } else { $selected+1 }
     $smaller = if ($encoderProfile.BetterDirection -eq 'Lower') { $selected+1 } else { $selected-1 }
@@ -358,11 +378,11 @@ if ($AutoEncode) {
     $outputExtension = [IO.Path]::GetExtension($finalOutputPath)
     $temporaryOutput = Join-Path $outputDirectory ($outputStem + '.partial.' + [guid]::NewGuid().ToString('N') + $outputExtension)
     try {
-        $temporaryArgs = @(New-EOFinalEncodeArguments -InputPath $inputPath -OutputPath $temporaryOutput -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $streamPlan -Quality ([int]$searchResult.SelectedQuality) -VideoFilter $VideoFilter)
+        $temporaryArgs = @(New-EOFinalEncodeArguments -InputPath $inputPath -OutputPath $temporaryOutput -SourceProbe $sourceProbe -EncoderProfile $finalEncoderProfile -ContainerPlan $containerPlan -StreamPlan $streamPlan -Quality ([int]$searchResult.SelectedQuality) -VideoFilter $VideoFilter)
         Write-Host "`nEncoding to temporary output..."
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $temporaryArgs -Description 'final encode' | Out-Null
         $outputProbe = Get-EOSourceProbe -Path $temporaryOutput -FFprobePath $resolvedFFprobe
-        $validation = Test-EOOutputValidation -SourceProbe $sourceProbe -OutputProbe $outputProbe -EncoderProfile $encoderProfile
+        $validation = Test-EOOutputValidation -SourceProbe $sourceProbe -OutputProbe $outputProbe -EncoderProfile $finalEncoderProfile
         if (-not $validation.Passed) { throw "Final output validation failed:`n - $($validation.Failures -join "`n - ")" }
         Move-Item -LiteralPath $temporaryOutput -Destination $finalOutputPath
         Write-Host "Output   : $finalOutputPath"

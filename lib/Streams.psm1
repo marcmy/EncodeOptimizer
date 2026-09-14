@@ -186,7 +186,8 @@ function New-EOFinalEncodeArguments {
         [Parameter(Mandatory)] $ContainerPlan,
         [Parameter(Mandatory)] $StreamPlan,
         [Parameter(Mandatory)] [int] $Quality,
-        [string] $VideoFilter
+        [string] $VideoFilter,
+        [switch] $Analysis
     )
 
     if ([IO.Path]::GetFullPath($InputPath) -eq [IO.Path]::GetFullPath($OutputPath)) { throw 'Output path must not overwrite the input file.' }
@@ -198,12 +199,21 @@ function New-EOFinalEncodeArguments {
 
     $args.Add('-c:v'); $args.Add([string]$EncoderProfile.Name)
     $args.Add([string]$EncoderProfile.QualityOption); $args.Add([string]$Quality)
-    foreach ($arg in @($EncoderProfile.Arguments)) { $args.Add([string]$arg) }
+    $profileArguments = if ($Analysis -and $EncoderProfile.PSObject.Properties['AnalysisArguments']) {
+        @($EncoderProfile.AnalysisArguments)
+    } else {
+        @($EncoderProfile.Arguments)
+    }
+    foreach ($arg in $profileArguments) { $args.Add([string]$arg) }
 
     $pixelFormat = Get-EOOutputPixelFormat -SourceProbe $SourceProbe -EncoderProfile $EncoderProfile
     $args.Add('-pix_fmt'); $args.Add($pixelFormat)
     Add-EOColorArguments -Arguments $args -Video $SourceProbe.Video
     if ($ContainerPlan.VideoTag) { $args.Add('-tag:v'); $args.Add([string]$ContainerPlan.VideoTag) }
+
+    # Preserve decoded frame timestamps instead of allowing FFmpeg's automatic output-vsync
+    # policy to retime fractional-rate/VFR material during candidate and final encodes.
+    $args.Add('-fps_mode'); $args.Add('passthrough')
 
     # Never add -r, CFR forcing, automatic deinterlacing, tone mapping, or unconditional overwrite.
     $args.Add($OutputPath)

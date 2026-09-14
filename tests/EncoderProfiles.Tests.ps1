@@ -8,7 +8,15 @@ BeforeAll {
     }
 
     function New-TestProbe {
-        param([string]$Codec, [int]$BitDepth = 8, [bool]$Hdr = $false, [string]$PixelFormat = 'yuv420p')
+        param(
+            [string]$Codec,
+            [int]$BitDepth = 8,
+            [bool]$Hdr = $false,
+            [string]$PixelFormat = 'yuv420p',
+            [int]$Width = 1920,
+            [int]$Height = 1080,
+            [double]$FrameRate = 29.97
+        )
         [pscustomobject]@{
             Video = [pscustomobject]@{
                 CodecName = $Codec
@@ -16,9 +24,9 @@ BeforeAll {
                 IsHdr = $Hdr
                 DolbyVision = $false
                 PixelFormat = $PixelFormat
-                Width = 1920
-                Height = 1080
-                FrameRate = 29.97
+                Width = $Width
+                Height = $Height
+                FrameRate = $FrameRate
             }
         }
     }
@@ -66,7 +74,43 @@ Describe 'automatic encoder policy' {
         $profile = Resolve-EOEncoderProfile -Name 'hevc_nvenc' -Capabilities $caps -SourceProbe (New-TestProbe 'hevc')
         $profile.Arguments | Should -Contain '-preset'
         $profile.Arguments | Should -Contain '-spatial-aq'
+        $profile.Arguments | Should -Contain '-b:v'
         $profile.Arguments | Should -Not -Contain '-temporal-aq'
         $profile.Arguments | Should -Not -Contain '-multipass'
+    }
+
+    It 'gives temporary HEVC NVENC search encodes maximum level and tier headroom' {
+        $options = @{ hevc_nvenc = @('preset','tune','cq','rc','multipass','spatial-aq','temporal-aq','aq-strength','level','tier') }
+        $caps = New-TestCapabilities @('hevc_nvenc') $options
+        $profile = Resolve-EOEncoderProfile -Name 'hevc_nvenc' -Capabilities $caps -SourceProbe (New-TestProbe 'h264' 8 $false 'yuv420p' 1920 1080 59.94)
+
+        ($profile.Arguments -join '|') | Should -Not -Match '\|-level\|'
+        ($profile.AnalysisArguments -join '|') | Should -Match '\|-level\|6\.2(?:\||$)'
+        ($profile.AnalysisArguments -join '|') | Should -Match '\|-tier\|high(?:\||$)'
+    }
+
+    It 'uses the lowest HEVC NVENC final level that preserves measured bitrate headroom' {
+        $options = @{ hevc_nvenc = @('preset','tune','cq','rc','multipass','spatial-aq','temporal-aq','aq-strength','level','tier') }
+        $caps = New-TestCapabilities @('hevc_nvenc') $options
+
+        $probe = New-TestProbe 'h264' 8 $false 'yuv420p' 1920 1080 59.94
+        $profile = Resolve-EOEncoderProfile -Name 'hevc_nvenc' -Capabilities $caps -SourceProbe $probe
+        $moderate = Resolve-EOFinalEncoderProfile -EncoderProfile $profile -SourceProbe $probe -RequiredVideoKbps 12000
+        $hard = Resolve-EOFinalEncoderProfile -EncoderProfile $profile -SourceProbe $probe -RequiredVideoKbps 75000
+
+        ($moderate.Arguments -join '|') | Should -Match '\|-level\|4\.1(?:\||$)'
+        ($hard.Arguments -join '|') | Should -Match '\|-level\|6\.1(?:\||$)'
+        ($hard.Arguments -join '|') | Should -Not -Match '\|-tier\|high(?:\||$)'
+    }
+
+    It 'uses HEVC High tier only when Level 6.2 Main headroom is insufficient' {
+        $options = @{ hevc_nvenc = @('preset','tune','cq','level','tier') }
+        $caps = New-TestCapabilities @('hevc_nvenc') $options
+        $probe = New-TestProbe 'h264' 8 $false 'yuv420p' 3840 2160 59.94
+        $profile = Resolve-EOEncoderProfile -Name 'hevc_nvenc' -Capabilities $caps -SourceProbe $probe
+        $final = Resolve-EOFinalEncoderProfile -EncoderProfile $profile -SourceProbe $probe -RequiredVideoKbps 180000
+
+        ($final.Arguments -join '|') | Should -Match '\|-level\|6\.2(?:\||$)'
+        ($final.Arguments -join '|') | Should -Match '\|-tier\|high(?:\||$)'
     }
 }

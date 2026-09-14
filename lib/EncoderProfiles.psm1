@@ -91,6 +91,7 @@ function Resolve-EOPreferredArguments {
     param($ConfigEntry, [string[]] $AvailableOptions)
 
     $result = [System.Collections.Generic.List[string]]::new()
+    $genericFfmpegOptions = @('b:v')
     $preferred = @($ConfigEntry.PreferredArgs)
     for ($i = 0; $i -lt $preferred.Count; $i += 2) {
         $option = [string]$preferred[$i]
@@ -98,12 +99,86 @@ function Resolve-EOPreferredArguments {
         if (-not $option.StartsWith('-')) { continue }
 
         $optionName = $option.TrimStart('-')
-        if (-not [bool]$ConfigEntry.Hardware -or $AvailableOptions -contains $optionName) {
+        if (-not [bool]$ConfigEntry.Hardware -or $genericFfmpegOptions -contains $optionName -or $AvailableOptions -contains $optionName) {
             $result.Add($option)
             if ($null -ne $value) { $result.Add($value) }
         }
     }
     return @($result)
+}
+
+function Get-EOHevcNvencOutputLevel {
+    param(
+        [Parameter(Mandatory)] $SourceProbe,
+        [Parameter(Mandatory)] [double] $RequiredVideoKbps
+    )
+
+    $width = [int]$SourceProbe.Video.Width
+    $height = [int]$SourceProbe.Video.Height
+    $frameRate = [double]$SourceProbe.Video.FrameRate
+
+    if ($width -le 0 -or $height -le 0 -or $frameRate -le 0) {
+        return '6.2'
+    }
+
+    $pictureSamples = [double]$width * [double]$height
+    $sampleRate = $pictureSamples * $frameRate
+
+    # NVENC CQ/VBR can be silently constrained by the selected HEVC level. These
+    # effective Main-tier ceilings are conservative relative to the nominal HEVC
+    # maxima and match the plateaus observed from NVENC at 4.1, 5.1, 5.2 and 6.0.
+    # Reserve 20% for full-file scenes harder than the sampled windows.
+    $requiredMbps = ([math]::Max(0.0, $RequiredVideoKbps) * 1.20) / 1000.0
+
+    $levels = @(
+        [pscustomobject]@{ Name='3';   MaxPicture=552960;   MaxSampleRate=33177600;   EffectiveMainMbps=4.8  }
+        [pscustomobject]@{ Name='3.1'; MaxPicture=983040;   MaxSampleRate=66846720;   EffectiveMainMbps=8.0  }
+        [pscustomobject]@{ Name='4';   MaxPicture=2228224;  MaxSampleRate=133693440;  EffectiveMainMbps=9.6  }
+        [pscustomobject]@{ Name='4.1'; MaxPicture=2228224;  MaxSampleRate=133693440;  EffectiveMainMbps=16.0 }
+        [pscustomobject]@{ Name='5';   MaxPicture=8912896;  MaxSampleRate=267386880;  EffectiveMainMbps=20.0 }
+        [pscustomobject]@{ Name='5.1'; MaxPicture=8912896;  MaxSampleRate=534773760;  EffectiveMainMbps=32.0 }
+        [pscustomobject]@{ Name='5.2'; MaxPicture=8912896;  MaxSampleRate=1069547520; EffectiveMainMbps=48.0 }
+        [pscustomobject]@{ Name='6';   MaxPicture=35651584; MaxSampleRate=1069547520; EffectiveMainMbps=48.0 }
+        [pscustomobject]@{ Name='6.1'; MaxPicture=35651584; MaxSampleRate=2139095040; EffectiveMainMbps=96.0 }
+        [pscustomobject]@{ Name='6.2'; MaxPicture=35651584; MaxSampleRate=4278190080; EffectiveMainMbps=192.0 }
+    )
+
+    foreach ($level in $levels) {
+        if ($pictureSamples -le [double]$level.MaxPicture -and
+            $sampleRate -le [double]$level.MaxSampleRate -and
+            $requiredMbps -le [double]$level.EffectiveMainMbps) {
+            return [string]$level.Name
+        }
+    }
+
+    return '6.2'
+}
+
+function Resolve-EOFinalEncoderProfile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $EncoderProfile,
+        [Parameter(Mandatory)] $SourceProbe,
+        [Parameter(Mandatory)] [double] $RequiredVideoKbps
+    )
+
+    if ([string]$EncoderProfile.Name -ne 'hevc_nvenc' -or @($EncoderProfile.AvailableOptions) -notcontains 'level') {
+        return $EncoderProfile
+    }
+
+    $level = Get-EOHevcNvencOutputLevel -SourceProbe $SourceProbe -RequiredVideoKbps $RequiredVideoKbps
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @($EncoderProfile.Arguments)) { $arguments.Add([string]$argument) }
+    $arguments.Add('-level'); $arguments.Add($level)
+
+    if ($level -eq '6.2' -and @($EncoderProfile.AvailableOptions) -contains 'tier' -and (($RequiredVideoKbps * 1.20) -gt 192000.0)) {
+        $arguments.Add('-tier'); $arguments.Add('high')
+    }
+
+    $copy = [ordered]@{}
+    foreach ($property in $EncoderProfile.PSObject.Properties) { $copy[$property.Name] = $property.Value }
+    $copy['Arguments'] = @($arguments)
+    return [pscustomobject]$copy
 }
 
 function Resolve-EOEncoderProfile {
@@ -130,6 +205,18 @@ function Resolve-EOEncoderProfile {
         throw "Encoder '$Name' does not expose required quality option '$($entry.QualityOption)'."
     }
 
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @(Resolve-EOPreferredArguments $entry $options)) {
+        $arguments.Add([string]$argument)
+    }
+
+    $analysisArguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @($arguments)) { $analysisArguments.Add([string]$argument) }
+    if ($Name -eq 'hevc_nvenc' -and $options -contains 'level') {
+        $analysisArguments.Add('-level'); $analysisArguments.Add('6.2')
+        if ($options -contains 'tier') { $analysisArguments.Add('-tier'); $analysisArguments.Add('high') }
+    }
+
     [pscustomobject]@{
         Name            = $Name
         Codec           = [string]$entry.Codec
@@ -142,7 +229,9 @@ function Resolve-EOEncoderProfile {
         Hardware        = [bool]$entry.Hardware
         SupportsHdr     = [bool]$entry.SupportsHdr
         PixelFormats    = @($entry.PixelFormats)
-        Arguments       = @(Resolve-EOPreferredArguments $entry $options)
+        Arguments       = @($arguments)
+        AnalysisArguments = @($analysisArguments)
+        AvailableOptions = @($options)
     }
 }
 
@@ -191,4 +280,4 @@ function Get-EOEncoderCandidates {
     return @($safe)
 }
 
-Export-ModuleMember -Function Get-EOEncoderCandidates, Resolve-EOEncoderProfile
+Export-ModuleMember -Function Get-EOEncoderCandidates, Resolve-EOEncoderProfile, Resolve-EOFinalEncoderProfile

@@ -46,6 +46,44 @@ function ConvertFrom-EORational {
     return ConvertTo-EODouble $text
 }
 
+function ConvertFrom-EODurationText {
+    param($Value)
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value) -or $Value -eq 'N/A') { return 0.0 }
+
+    $text = ([string]$Value).Trim()
+    $numeric = ConvertTo-EODouble $text ([double]::NaN)
+    if (-not [double]::IsNaN($numeric) -and $numeric -gt 0) { return $numeric }
+
+    if ($text -match '^(?<hours>\d+):(?<minutes>\d{1,2}):(?<seconds>\d{1,2}(?:\.\d+)?)$') {
+        $hours = ConvertTo-EODouble $Matches.hours
+        $minutes = ConvertTo-EODouble $Matches.minutes
+        $seconds = ConvertTo-EODouble $Matches.seconds
+        if ($minutes -lt 60 -and $seconds -lt 60) { return ($hours * 3600.0) + ($minutes * 60.0) + $seconds }
+    }
+
+    return 0.0
+}
+
+function Get-EOStreamDuration {
+    param($Stream)
+
+    $duration = ConvertTo-EODouble (Get-EOPropertyValue $Stream 'duration' 0)
+    if ($duration -gt 0) { return $duration }
+
+    $durationTs = ConvertTo-EODouble (Get-EOPropertyValue $Stream 'duration_ts' 0)
+    $timeBase = ConvertFrom-EORational (Get-EOPropertyValue $Stream 'time_base' '0/0')
+    if ($durationTs -gt 0 -and $timeBase -gt 0) {
+        $duration = $durationTs * $timeBase
+        if ($duration -gt 0) { return $duration }
+    }
+
+    $tags = Get-EOPropertyValue $Stream 'tags'
+    $duration = ConvertFrom-EODurationText (Get-EOPropertyValue $tags 'DURATION')
+    if ($duration -gt 0) { return $duration }
+
+    return 0.0
+}
+
 function Get-EOBitDepth {
     param([string] $PixelFormat)
     if (-not $PixelFormat) { return 0 }
@@ -223,7 +261,7 @@ function ConvertFrom-EOFFprobeJson {
         MaxCLL            = $hdr.MaxCLL
         MaxFALL           = $hdr.MaxFALL
         BitRate           = ConvertTo-EOInt64 (Get-EOPropertyValue $videoStream 'bit_rate' 0)
-        Duration          = ConvertTo-EODouble (Get-EOPropertyValue $videoStream 'duration' 0)
+        Duration          = Get-EOStreamDuration $videoStream
         FrameCount        = ConvertTo-EOInt64 (Get-EOPropertyValue $videoStream 'nb_frames' 0)
         Language          = [string](Get-EOPropertyValue $tags 'language' '')
         Disposition       = ConvertTo-EODisposition (Get-EOPropertyValue $videoStream 'disposition')

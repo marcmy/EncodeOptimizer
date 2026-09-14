@@ -1,7 +1,7 @@
 Describe 'real FFmpeg integration' -Tag 'Integration' {
     BeforeAll {
         $repoRoot = Split-Path -Parent $PSScriptRoot
-        foreach ($moduleName in 'Capability','Probe','EncoderProfiles','Streams','Metrics') {
+        foreach ($moduleName in 'Capability','Probe','EncoderProfiles','Streams','Sampling','Metrics') {
             Import-Module (Join-Path $repoRoot "lib\$moduleName.psm1") -Force
         }
 
@@ -121,6 +121,39 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
         if ($null -ne $aggregate.MeanSsim) { $aggregate.MeanSsim | Should -BeGreaterThan 0.98 }
     }
 
+    It 'uses the primary video timeline when Matroska audio outlasts video' {
+        $source = Join-Path $script:root 'audio-longer-than-video.mkv'
+        $reference = Join-Path $script:root 'audio-longer-tail-reference.mkv'
+        $fixtureArgs = @(
+            '-hide_banner','-loglevel','error',
+            '-f','lavfi','-i','testsrc2=size=320x180:rate=60000/1001:duration=6.4',
+            '-f','lavfi','-i','sine=frequency=1000:sample_rate=48000:duration=10',
+            '-c:v','libx264','-preset','veryfast','-crf','8','-pix_fmt','yuv420p',
+            '-c:a','aac','-b:a','96k',
+            $source
+        )
+        & $script:ffmpeg @fixtureArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate mismatched-duration integration fixture.' }
+
+        $probe = Get-EOSourceProbe -Path $source -FFprobePath $script:ffprobe
+        $samplingDuration = Get-EOSamplingDuration -SourceProbe $probe
+        $probe.Format.Duration | Should -BeGreaterThan 9.9
+        $probe.Video.Duration | Should -BeGreaterThan 6.3
+        $probe.Video.Duration | Should -BeLessThan 6.5
+        $samplingDuration | Should -Be $probe.Video.Duration
+
+        $windows = @(Get-EOAnalysisWindows -Duration $samplingDuration -WindowDuration 3.0 -WindowCount 4)
+        $tail = $windows[-1]
+        $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $source -OutputPath $reference -Start ([double]$tail.Start) -Duration ([double]$tail.Duration))
+        & $script:ffmpeg @referenceArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate EOF-adjacent lossless reference sample.' }
+
+        $frameJson = (& $script:ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of json -- $reference 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to count EOF-adjacent reference frames.' }
+        $frameProbe = $frameJson | ConvertFrom-Json
+        [int]$frameProbe.streams[0].nb_read_frames | Should -BeGreaterThan 170
+    }
+
     It 'runs the public analyze path and persists a machine-readable report' {
         $oldLocalAppData = $env:LOCALAPPDATA
         $env:LOCALAPPDATA = Join-Path $script:root 'localappdata'
@@ -129,7 +162,7 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
             $report = & $optimizer -Path $script:source -Profile Aggressive -Encoder libx264 -FFmpegPath $script:ffmpeg -FFprobePath $script:ffprobe
 
             $report | Should -Not -BeNullOrEmpty
-            $report.SchemaVersion | Should -Be 1
+            $report.SchemaVersion | Should -Be 2
             $report.Source.Path | Should -Be ([IO.Path]::GetFullPath($script:source))
             $report.Decision | Should -BeIn @('ENCODE','KEEP_SOURCE')
             @($report.Candidates).Count | Should -BeGreaterThan 0
@@ -137,7 +170,7 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
             $jsonReports = @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'EncodeOptimizer\work') -Filter report.json -Recurse -File -ErrorAction Stop)
             $jsonReports.Count | Should -BeGreaterThan 0
             $persisted = Get-Content -LiteralPath ($jsonReports | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName -Raw | ConvertFrom-Json -Depth 100
-            $persisted.SchemaVersion | Should -Be 1
+            $persisted.SchemaVersion | Should -Be 2
             $persisted.Source.Path | Should -Be ([IO.Path]::GetFullPath($script:source))
             $persisted.Decision | Should -Be $report.Decision
         } finally {

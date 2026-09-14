@@ -137,4 +137,14 @@ lavfi.scd.score=0
         $windows[0].Start | Should -Be 0
         $windows[-1].Start | Should -Be 90
     }
+
+    It 'uses the primary video timeline instead of a longer container timeline' {
+        Get-Command Get-EOSamplingDuration -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        $probe = [pscustomobject]@{
+            Video = [pscustomobject]@{ Duration = 10.411; FrameCount = 0; FrameRate = 59.940063 }
+            Format = [pscustomobject]@{ Duration = 20.021 }
+        }
+
+        Get-EOSamplingDuration -SourceProbe $probe | Should -Be 10.411
+    }
 }
