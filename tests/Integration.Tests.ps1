@@ -88,6 +88,39 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
         if ($null -ne $aggregate.MeanSsim) { ($aggregate.MeanSsim -gt 0.95) | Should -BeTrue }
     }
 
+    It 'keeps a fractional 59.94 fps sample temporally aligned through a deterministic lossless reference' {
+        $source = Join-Path $script:root 'fractional-5994-source.mkv'
+        $reference = Join-Path $script:root 'fractional-5994-reference.mkv'
+        $candidate = Join-Path $script:root 'fractional-5994-candidate.mkv'
+        $fixtureArgs = @(
+            '-hide_banner','-loglevel','error',
+            '-f','lavfi','-i','testsrc2=size=320x180:rate=60000/1001:duration=8',
+            '-c:v','libx264','-preset','veryfast','-crf','8','-pix_fmt','yuv420p',
+            $source
+        )
+        & $script:ffmpeg @fixtureArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate 59.94 fps integration fixture.' }
+
+        $probe = Get-EOSourceProbe -Path $source -FFprobePath $script:ffprobe
+        $profile = Resolve-EOEncoderProfile -Name 'libx264' -Capabilities $script:capabilities -SourceProbe $probe
+        $container = Get-EOContainerPlan -SourceProbe $probe -EncoderProfile $profile
+        $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
+        $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $source -OutputPath $reference -Start 2.137 -Duration 3.0)
+        & $script:ffmpeg @referenceArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate fractional lossless reference sample.' }
+
+        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $reference -OutputPath $candidate -SourceProbe $probe -EncoderProfile $profile -ContainerPlan $container -StreamPlan $videoOnly -Quality 10)
+        & $script:ffmpeg @candidateArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to encode candidate from fractional lossless reference sample.' }
+
+        $plan = Get-EOMetricPlan -SourceProbe $probe -Capabilities $script:capabilities
+        $metrics = Invoke-EOMetrics -ReferencePath $reference -CandidatePath $candidate -MetricPlan $plan -ReferenceStart 0 -Duration 3.0 -SampleName 'fractional-5994' -FFmpegPath $script:ffmpeg -WorkDirectory (Join-Path $script:root 'fractional-5994-metrics')
+        $aggregate = Measure-EOMetricAggregate -Samples @($metrics) -VmafRole $plan.VmafRole
+
+        if ($null -ne $aggregate.MeanVmaf) { $aggregate.MeanVmaf | Should -BeGreaterThan 95.0 }
+        if ($null -ne $aggregate.MeanSsim) { $aggregate.MeanSsim | Should -BeGreaterThan 0.98 }
+    }
+
     It 'runs the public analyze path and persists a machine-readable report' {
         $oldLocalAppData = $env:LOCALAPPDATA
         $env:LOCALAPPDATA = Join-Path $script:root 'localappdata'

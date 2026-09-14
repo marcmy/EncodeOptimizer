@@ -22,6 +22,38 @@ BeforeAll {
 }
 
 Describe 'content-aware sample selection' {
+    It 'does not mistake temporal motion variance for image noise when bit-plane noise is low' {
+        $window = [pscustomobject]@{ Start = 12.345; Duration = 4.0 }
+        $runner = {
+            param($Executable, $Arguments)
+            @'
+lavfi.signalstats.YAVG=100
+lavfi.signalstats.YLOW=20
+lavfi.signalstats.YHIGH=220
+lavfi.signalstats.YDIF=1
+lavfi.bitplanenoise.0.1=0.015
+lavfi.scd.score=0
+lavfi.signalstats.YAVG=100
+lavfi.signalstats.YLOW=20
+lavfi.signalstats.YHIGH=220
+lavfi.signalstats.YDIF=40
+lavfi.bitplanenoise.0.1=0.020
+lavfi.scd.score=0
+lavfi.signalstats.YAVG=100
+lavfi.signalstats.YLOW=20
+lavfi.signalstats.YHIGH=220
+lavfi.signalstats.YDIF=2
+lavfi.bitplanenoise.0.1=0.018
+lavfi.scd.score=0
+'@
+        }
+
+        $feature = @(Get-EOContentFeatures -Path 'synthetic.mp4' -AnalysisWindows @($window) -FFmpegPath 'ffmpeg' -CommandRunner $runner)[0]
+
+        $feature.Motion | Should -BeGreaterThan 0.4
+        $feature.Noise | Should -BeLessThan 0.25
+    }
+
     It 'provides disjoint search and verification samples with broad temporal coverage' {
         Get-Command Select-EOSamples -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         $windows = 0..11 | ForEach-Object { New-FeatureWindow -Start ($_ * 10) -Motion (0.15 + ($_ % 4) * 0.1) -Detail (0.2 + ($_ % 3) * 0.1) }

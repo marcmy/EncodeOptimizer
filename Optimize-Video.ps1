@@ -184,6 +184,7 @@ $containerPlan = Get-EOContainerPlan -SourceProbe $sourceProbe -EncoderProfile $
 $streamPlan = Get-EOStreamPlan -SourceProbe $sourceProbe -ContainerPlan $containerPlan
 foreach ($warning in @($containerPlan.Warnings) + @($streamPlan.Warnings)) { $warnings.Add([string]$warning) }
 $metricPlan = Get-EOMetricPlan -SourceProbe $sourceProbe -Capabilities $capabilities -VideoFilter $VideoFilter
+$sampleMetricPlan = Get-EOMetricPlan -SourceProbe $sourceProbe -Capabilities $capabilities
 foreach ($warning in @($metricPlan.Warnings)) { $warnings.Add([string]$warning) }
 $safetyGate = Get-EOSafetyGate -SourceProbe $sourceProbe -MetricPlan $metricPlan -AllowHdrAutoEncode:$AllowHdrAutoEncode -AllowInterlacedAutoEncode:$AllowInterlacedAutoEncode -AllowSecondaryMetricsAutoEncode:$AllowSecondaryMetricsAutoEncode
 foreach ($warning in @($safetyGate.Warnings)) { $warnings.Add([string]$warning) }
@@ -199,10 +200,11 @@ $sourceBytes = [long]$sourceProbe.Format.Size
 if ($sourceBytes -le 0) { $sourceBytes = [long]$inputItem.Length }
 
 $fingerprint = Get-EOSourceFingerprint -Path $inputPath
+$pipelineVersion = 'deterministic-reference-v2'
 $encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
 $policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumXpsnr,$policy.MinimumSsim,$policy.MinimumPsnr,$policy.MinimumSavingsRatio) -join '|'
 $cacheRoot = Get-EODefaultCacheRoot
-$cacheKey = Get-EOCacheKey -SourceFingerprint $fingerprint -VideoFilter $VideoFilter -EncoderName $encoderName -EncoderSignature $encoderSignature -FFmpegVersion $capabilities.Version -PolicyName $Profile -PolicySignature $policySignature
+$cacheKey = Get-EOCacheKey -SourceFingerprint $fingerprint -VideoFilter $VideoFilter -EncoderName $encoderName -EncoderSignature $encoderSignature -FFmpegVersion $capabilities.Version -PolicyName $Profile -PolicySignature $policySignature -PipelineVersion $pipelineVersion
 $workRoot = Join-Path (Join-Path $cacheRoot 'work') $cacheKey
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 
@@ -211,9 +213,37 @@ Write-Host "Analyzing content complexity ($($analysisWindows.Count) windows)..."
 $features = Get-EOContentFeatures -Path $inputPath -AnalysisWindows $analysisWindows -FFmpegPath $resolvedFFmpeg
 $samplePlan = Select-EOSamples -FeatureWindows $features -Duration $duration
 
+if (@($capabilities.Encoders) -notcontains 'ffv1') {
+    throw 'FFmpeg does not expose the lossless FFV1 encoder required for deterministic reference samples.'
+}
+
+$referenceRoot = Join-Path $workRoot 'reference-samples'
+if (Test-Path -LiteralPath $referenceRoot) { Remove-Item -LiteralPath $referenceRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $referenceRoot -Force | Out-Null
+$referencePaths = @{
+    Search = [System.Collections.Generic.List[string]]::new()
+    Verification = [System.Collections.Generic.List[string]]::new()
+}
+
+Write-Host 'Preparing deterministic lossless reference samples...'
+foreach ($phase in @('Search','Verification')) {
+    $phaseSamples = if ($phase -eq 'Search') { @($samplePlan.SearchSamples) } else { @($samplePlan.VerificationSamples) }
+    for ($i = 0; $i -lt $phaseSamples.Count; $i++) {
+        $sample = $phaseSamples[$i]
+        $referencePath = Join-Path $referenceRoot ("$phase-s$($i + 1).mkv")
+        $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $inputPath -OutputPath $referencePath -Start ([double]$sample.Start) -Duration ([double]$sample.Duration) -VideoFilter $VideoFilter)
+        Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $referenceArgs -Description "$phase reference sample $($i + 1)" | Out-Null
+        $referencePaths[$phase].Add($referencePath)
+    }
+}
+
+$populationComplexities = @($features | ForEach-Object {
+    Get-EOSampleComplexity ([pscustomobject]@{ Features = $_ })
+})
+
 $resolutionClass = Get-EOResolutionClass $sourceProbe.Video
 $fpsClass = Get-EOFpsClass ([double]$sourceProbe.Video.FrameRate)
-$historySeed = Get-EOHistorySeed -CacheRoot $cacheRoot -Encoder $encoderName -Codec ([string]$sourceProbe.Video.CodecName) -ResolutionClass $resolutionClass -FpsClass $fpsClass -BitDepth ([int]$sourceProbe.Video.BitDepth) -HdrKind ([string]$sourceProbe.Video.HdrKind)
+$historySeed = Get-EOHistorySeed -CacheRoot $cacheRoot -Encoder $encoderName -Codec ([string]$sourceProbe.Video.CodecName) -ResolutionClass $resolutionClass -FpsClass $fpsClass -BitDepth ([int]$sourceProbe.Video.BitDepth) -HdrKind ([string]$sourceProbe.Video.HdrKind) -PipelineVersion $pipelineVersion
 $auxiliaryKbps = Get-EOAuxiliaryBitrateKbps $sourceProbe
 
 $evaluator = {
@@ -226,13 +256,14 @@ $evaluator = {
         $sampleDirectory = Join-Path $workRoot ("$Phase-q$Quality-s$sampleIndex-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $sampleDirectory -Force | Out-Null
         $candidatePath = Join-Path $sampleDirectory ('candidate' + $containerPlan.Extension)
+        $referencePath = $referencePaths[$Phase][$sampleIndex - 1]
         $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
-        $baseArgs = @(New-EOFinalEncodeArguments -InputPath $inputPath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -VideoFilter $VideoFilter)
-        $sampleArgs = @(Add-EOSampleWindowArguments -Arguments $baseArgs -Start ([double]$sample.Start) -Duration ([double]$sample.Duration))
-        Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $sampleArgs -Description "candidate sample encode q$Quality" | Out-Null
+        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $videoOnly -Quality ([int]$Quality))
+        Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $candidateArgs -Description "candidate sample encode q$Quality" | Out-Null
 
         $metricDirectory = Join-Path $sampleDirectory 'metrics'
-        $metric = Invoke-EOMetrics -ReferencePath $inputPath -CandidatePath $candidatePath -MetricPlan $metricPlan -ReferenceStart ([double]$sample.Start) -Duration ([double]$sample.Duration) -SampleName ("$Phase-$sampleIndex") -FFmpegPath $resolvedFFmpeg -WorkDirectory $metricDirectory
+        $metric = Invoke-EOMetrics -ReferencePath $referencePath -CandidatePath $candidatePath -MetricPlan $sampleMetricPlan -ReferenceStart 0 -Duration ([double]$sample.Duration) -SampleName ("$Phase-$sampleIndex") -FFmpegPath $resolvedFFmpeg -WorkDirectory $metricDirectory
+        $metric.Start = [double]$sample.Start
         $metric | Add-Member -NotePropertyName Complexity -NotePropertyValue (Get-EOSampleComplexity $sample) -Force
         $metricSamples.Add($metric)
         $sizeSamples.Add([pscustomobject]@{ CandidateKbps=$metric.CandidateKbps; Complexity=$metric.Complexity; Duration=[double]$sample.Duration })
@@ -243,9 +274,9 @@ $evaluator = {
         }
     }
 
-    $aggregate = Measure-EOMetricAggregate -Samples @($metricSamples) -VmafRole $metricPlan.VmafRole
+    $aggregate = Measure-EOMetricAggregate -Samples @($metricSamples) -VmafRole $sampleMetricPlan.VmafRole
     $policyDecision = Test-EOQualityPolicy -Aggregate $aggregate -Policy $policy
-    $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $duration -AuxiliaryBitrateKbps $auxiliaryKbps
+    $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $duration -PopulationComplexities $populationComplexities -AuxiliaryBitrateKbps $auxiliaryKbps
     return [pscustomobject]@{
         Quality=$Quality; Phase=$Phase; Passed=$policyDecision.Passed; MinimumMargin=$policyDecision.MinimumMargin; AuthoritativeMetric=$policyDecision.AuthoritativeMetric
         MeanVmaf=$aggregate.MeanVmaf; WorstSampleVmaf=$aggregate.WorstSampleVmaf; P05Vmaf=$aggregate.P05Vmaf
@@ -261,6 +292,7 @@ $searchParameters = @{
 }
 if ($null -ne $historySeed) { $searchParameters.SeedQuality = [int]$historySeed }
 $searchResult = Find-EOOptimalQuality @searchParameters
+if (-not $KeepSamples) { Remove-Item -LiteralPath $referenceRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
 $finalSizeEstimate = if ($searchResult.FinalEvaluation -and $searchResult.FinalEvaluation.PSObject.Properties['SizeEstimate']) { $searchResult.FinalEvaluation.SizeEstimate } else { $null }
 $hardReasons = @('motion','detail','noise','dark','gradient','scene')
@@ -299,14 +331,14 @@ Write-Host (Format-EOHumanReport -Report $report)
 Write-Host "`nReport   : $reportPath"
 
 $cacheEntry = [pscustomobject]@{
-    SchemaVersion=1; SourceFingerprint=$fingerprint; Decision=$searchResult.Decision; SelectedQuality=$searchResult.SelectedQuality
+    SchemaVersion=1; PipelineVersion=$pipelineVersion; SourceFingerprint=$fingerprint; Decision=$searchResult.Decision; SelectedQuality=$searchResult.SelectedQuality
     Encoder=$encoderName; Profile=$Profile; Confidence=$confidence.Label; Verified=[bool]$searchResult.VerificationPassed
     SavingsRatio=$searchResult.SavingsRatio; EstimatedBytes=$searchResult.EstimatedBytes; ReportPath=$reportPath; RecordedAt=[DateTimeOffset]::UtcNow.ToString('o')
 }
 Write-EOCacheEntry -CacheRoot $cacheRoot -Key $cacheKey -Entry $cacheEntry | Out-Null
 if ($null -ne $searchResult.SelectedQuality -and $searchResult.VerificationPassed) {
     Add-EOHistoryEntry -CacheRoot $cacheRoot -Entry ([pscustomobject]@{
-        Encoder=$encoderName; Codec=[string]$sourceProbe.Video.CodecName; ResolutionClass=$resolutionClass; FpsClass=$fpsClass
+        PipelineVersion=$pipelineVersion; Encoder=$encoderName; Codec=[string]$sourceProbe.Video.CodecName; ResolutionClass=$resolutionClass; FpsClass=$fpsClass
         BitDepth=[int]$sourceProbe.Video.BitDepth; HdrKind=[string]$sourceProbe.Video.HdrKind; SelectedQuality=[int]$searchResult.SelectedQuality; Verified=$true
     })
 }

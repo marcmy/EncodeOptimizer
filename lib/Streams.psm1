@@ -210,6 +210,32 @@ function New-EOFinalEncodeArguments {
     return @($args)
 }
 
+function New-EOReferenceSampleArguments {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $InputPath,
+        [Parameter(Mandatory)] [string] $OutputPath,
+        [Parameter(Mandatory)] [double] $Start,
+        [Parameter(Mandatory)] [double] $Duration,
+        [string] $VideoFilter
+    )
+
+    if ($Start -lt 0) { throw 'Reference sample start must not be negative.' }
+    if ($Duration -le 0) { throw 'Reference sample duration must be greater than zero.' }
+    if ([IO.Path]::GetFullPath($InputPath) -eq [IO.Path]::GetFullPath($OutputPath)) { throw 'Reference sample output path must not overwrite the input file.' }
+
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $args = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @('-hide_banner','-nostdin','-ss',$Start.ToString($culture),'-i',$InputPath,'-t',$Duration.ToString($culture),'-map','0:v:0','-an','-sn','-dn')) {
+        $args.Add([string]$item)
+    }
+    if ($VideoFilter) { $args.Add('-vf'); $args.Add($VideoFilter) }
+    foreach ($item in @('-c:v','ffv1','-level','3','-g','1','-fps_mode','passthrough',$OutputPath)) {
+        $args.Add([string]$item)
+    }
+    return $args.ToArray()
+}
+
 function Add-EOSampleWindowArguments {
     [CmdletBinding()]
     param(
@@ -230,4 +256,4 @@ function Add-EOSampleWindowArguments {
     return $result.ToArray()
 }
 
-Export-ModuleMember -Function Get-EOContainerPlan, Get-EOStreamPlan, New-EOFinalEncodeArguments, Add-EOSampleWindowArguments
+Export-ModuleMember -Function Get-EOContainerPlan, Get-EOStreamPlan, New-EOFinalEncodeArguments, New-EOReferenceSampleArguments, Add-EOSampleWindowArguments

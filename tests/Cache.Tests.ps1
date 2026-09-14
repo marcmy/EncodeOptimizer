@@ -21,6 +21,7 @@ Describe 'deterministic cache keys' {
             FFmpegVersion = '8.0'
             PolicyName = 'Conservative'
             PolicySignature = '98-97-95'
+            PipelineVersion = 'deterministic-reference-v2'
         }
         $key = Get-EOCacheKey @base
 
@@ -31,7 +32,8 @@ Describe 'deterministic cache keys' {
             @{ EncoderSignature='p7-hq-aq10' },
             @{ FFmpegVersion='8.1' },
             @{ PolicyName='Balanced' },
-            @{ PolicySignature='97-95.5-93.5' }
+            @{ PolicySignature='97-95.5-93.5' },
+            @{ PipelineVersion='legacy-independent-seeks-v1' }
         )) {
             $args = @{} + $base
             foreach ($pair in $mutation.GetEnumerator()) { $args[$pair.Key] = $pair.Value }
@@ -67,10 +69,22 @@ Describe 'deterministic cache keys' {
     It 'uses history only as a seed for closely matching content classes' {
         $root = Join-Path ([IO.Path]::GetTempPath()) ('eo-history-test-' + [guid]::NewGuid().ToString('N'))
         try {
-            Add-EOHistoryEntry -CacheRoot $root -Entry ([pscustomobject]@{ Encoder='hevc_nvenc'; Codec='hevc'; ResolutionClass='720p'; FpsClass='30'; BitDepth=8; HdrKind='SDR'; SelectedQuality=16; Verified=$true })
-            Add-EOHistoryEntry -CacheRoot $root -Entry ([pscustomobject]@{ Encoder='hevc_nvenc'; Codec='hevc'; ResolutionClass='4K'; FpsClass='60'; BitDepth=10; HdrKind='HDR10'; SelectedQuality=11; Verified=$true })
-            $seed = Get-EOHistorySeed -CacheRoot $root -Encoder 'hevc_nvenc' -Codec 'hevc' -ResolutionClass '720p' -FpsClass '30' -BitDepth 8 -HdrKind 'SDR'
+            Add-EOHistoryEntry -CacheRoot $root -Entry ([pscustomobject]@{ PipelineVersion='deterministic-reference-v2'; Encoder='hevc_nvenc'; Codec='hevc'; ResolutionClass='720p'; FpsClass='30'; BitDepth=8; HdrKind='SDR'; SelectedQuality=16; Verified=$true })
+            Add-EOHistoryEntry -CacheRoot $root -Entry ([pscustomobject]@{ PipelineVersion='deterministic-reference-v2'; Encoder='hevc_nvenc'; Codec='hevc'; ResolutionClass='4K'; FpsClass='60'; BitDepth=10; HdrKind='HDR10'; SelectedQuality=11; Verified=$true })
+            $seed = Get-EOHistorySeed -CacheRoot $root -Encoder 'hevc_nvenc' -Codec 'hevc' -ResolutionClass '720p' -FpsClass '30' -BitDepth 8 -HdrKind 'SDR' -PipelineVersion 'deterministic-reference-v2'
             $seed | Should -Be 16
+        } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'does not seed a deterministic-reference search from legacy metric history' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('eo-history-version-' + [guid]::NewGuid().ToString('N'))
+        try {
+            Add-EOHistoryEntry -CacheRoot $root -Entry ([pscustomobject]@{ Encoder='hevc_nvenc'; Codec='h264'; ResolutionClass='1080p'; FpsClass='60'; BitDepth=8; HdrKind='SDR'; SelectedQuality=10; Verified=$true })
+            Add-EOHistoryEntry -CacheRoot $root -Entry ([pscustomobject]@{ PipelineVersion='deterministic-reference-v2'; Encoder='hevc_nvenc'; Codec='h264'; ResolutionClass='1080p'; FpsClass='60'; BitDepth=8; HdrKind='SDR'; SelectedQuality=18; Verified=$true })
+
+            $seed = Get-EOHistorySeed -CacheRoot $root -Encoder 'hevc_nvenc' -Codec 'h264' -ResolutionClass '1080p' -FpsClass '60' -BitDepth 8 -HdrKind 'SDR' -PipelineVersion 'deterministic-reference-v2'
+
+            $seed | Should -Be 18
         } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
     }
 

@@ -126,6 +126,22 @@ Describe 'output-size estimation' {
         $estimate.UpperBytes | Should -BeGreaterThan $estimate.EstimatedBytes
         $estimate.AuxiliaryKbps | Should -Be 128
     }
+
+    It 'corrects hard-sample selection bias against the full analysis-window complexity distribution' {
+        $samples = @(
+            [pscustomobject]@{ CandidateKbps = 1600.0; Complexity = 0.60; Duration = 10.0 },
+            [pscustomobject]@{ CandidateKbps = 1800.0; Complexity = 0.80; Duration = 10.0 },
+            [pscustomobject]@{ CandidateKbps = 2000.0; Complexity = 1.00; Duration = 10.0 }
+        )
+        $population = @(0.10,0.20,0.30,0.40,0.50,0.60,0.70,0.80,0.90,1.00)
+        $estimate = Estimate-EOOutputSize -SampleResults $samples -DurationSeconds 600 -PopulationComplexities $population
+
+        $estimate.SamplingBiasCorrectionApplied | Should -BeTrue
+        $estimate.SampleMeanKbps | Should -Be 1800
+        $estimate.VideoKbps | Should -BeGreaterThan 1500
+        $estimate.VideoKbps | Should -BeLessThan 1600
+        $estimate.PopulationMeanComplexity | Should -Be 0.55
+    }
 }
 
 Describe 'recommendation confidence' {

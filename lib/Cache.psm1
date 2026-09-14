@@ -66,7 +66,8 @@ function Get-EOCacheKey {
         [string]$EncoderSignature = '',
         [Parameter(Mandatory)][string]$FFmpegVersion,
         [Parameter(Mandatory)][string]$PolicyName,
-        [string]$PolicySignature = ''
+        [string]$PolicySignature = '',
+        [string]$PipelineVersion = 'legacy-v1'
     )
 
     $canonical = [ordered]@{
@@ -79,6 +80,7 @@ function Get-EOCacheKey {
         FFmpegVersion    = [string]$FFmpegVersion
         PolicyName       = [string]$PolicyName
         PolicySignature  = [string]$PolicySignature
+        PipelineVersion  = [string]$PipelineVersion
     }
     return Get-EOStringHash ($canonical | ConvertTo-Json -Compress -Depth 8)
 }
@@ -187,6 +189,7 @@ function Get-EOHistorySeed {
         [Parameter(Mandatory)][string]$FpsClass,
         [Parameter(Mandatory)][int]$BitDepth,
         [Parameter(Mandatory)][string]$HdrKind,
+        [string]$PipelineVersion = '',
         [int]$MaximumMatches=25
     )
     $matches = @(Read-EOHistory $CacheRoot | Where-Object {
@@ -194,6 +197,7 @@ function Get-EOHistorySeed {
         [string]$_.Encoder -eq $Encoder -and [string]$_.Codec -eq $Codec -and
         [string]$_.ResolutionClass -eq $ResolutionClass -and [string]$_.FpsClass -eq $FpsClass -and
         [int]$_.BitDepth -eq $BitDepth -and [string]$_.HdrKind -eq $HdrKind -and
+        ([string]::IsNullOrWhiteSpace($PipelineVersion) -or ($_.PSObject.Properties['PipelineVersion'] -and [string]$_.PipelineVersion -eq $PipelineVersion)) -and
         $null -ne $_.SelectedQuality
     } | Select-Object -Last $MaximumMatches)
     if ($matches.Count -eq 0) { return $null }

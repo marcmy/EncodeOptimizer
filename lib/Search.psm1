@@ -19,6 +19,7 @@ function Estimate-EOOutputSize {
     param(
         [Parameter(Mandatory)] [object[]] $SampleResults,
         [Parameter(Mandatory)] [double] $DurationSeconds,
+        [double[]] $PopulationComplexities = @(),
         [double] $AuxiliaryBitrateKbps = 0.0,
         [double] $ContainerOverheadRatio = 0.005
     )
@@ -29,19 +30,52 @@ function Estimate-EOOutputSize {
 
     $weightedTotal = 0.0
     $weightTotal = 0.0
+    $complexityTotal = 0.0
     $bitrates = [System.Collections.Generic.List[double]]::new()
     foreach ($sample in $usable) {
         $kbps = [double](Get-EOSearchProperty $sample 'CandidateKbps')
         $complexity = Limit-EOScore ([double](Get-EOSearchProperty $sample 'Complexity' 0.5))
         $sampleDuration = [math]::Max(0.25, [double](Get-EOSearchProperty $sample 'Duration' 1.0))
-        # Difficult samples deserve more influence, but never enough to let one clip dominate.
-        $weight = $sampleDuration * (0.5 + $complexity)
+        $weight = $sampleDuration
         $weightedTotal += $kbps * $weight
+        $complexityTotal += $complexity * $weight
         $weightTotal += $weight
         $bitrates.Add($kbps)
     }
 
-    $videoKbps = $weightedTotal / $weightTotal
+    $sampleMeanKbps = $weightedTotal / $weightTotal
+    $sampleMeanComplexity = $complexityTotal / $weightTotal
+    $videoKbps = $sampleMeanKbps
+    $population = @($PopulationComplexities | ForEach-Object { Limit-EOScore ([double]$_) })
+    $populationMeanComplexity = if ($population.Count) { [double](($population | Measure-Object -Average).Average) } else { $null }
+    $biasCorrectionApplied = $false
+
+    # Search clips are intentionally skewed toward hard content. Fit bitrate as a
+    # function of measured complexity on those clips, then evaluate that model over
+    # the full analysis-window distribution so difficult samples do not masquerade
+    # as the average content of the entire source.
+    if ($population.Count -gt 0 -and $usable.Count -ge 2) {
+        $covariance = 0.0
+        $complexityVariance = 0.0
+        foreach ($sample in $usable) {
+            $kbps = [double](Get-EOSearchProperty $sample 'CandidateKbps')
+            $complexity = Limit-EOScore ([double](Get-EOSearchProperty $sample 'Complexity' 0.5))
+            $sampleDuration = [math]::Max(0.25, [double](Get-EOSearchProperty $sample 'Duration' 1.0))
+            $dx = $complexity - $sampleMeanComplexity
+            $covariance += $sampleDuration * $dx * ($kbps - $sampleMeanKbps)
+            $complexityVariance += $sampleDuration * $dx * $dx
+        }
+        if ($complexityVariance -gt 1e-9) {
+            $slope = $covariance / $complexityVariance
+            $intercept = $sampleMeanKbps - ($slope * $sampleMeanComplexity)
+            $predicted = @($population | ForEach-Object { [math]::Max(0.0, $intercept + ($slope * [double]$_)) })
+            if ($predicted.Count -gt 0) {
+                $videoKbps = [double](($predicted | Measure-Object -Average).Average)
+                $biasCorrectionApplied = $true
+            }
+        }
+    }
+
     $mean = ($bitrates | Measure-Object -Average).Average
     $stddev = 0.0
     if ($bitrates.Count -gt 1 -and $mean -gt 0) {
@@ -49,7 +83,8 @@ function Estimate-EOOutputSize {
         $stddev = [math]::Sqrt($variance)
     }
     $coefficientVariation = if ($mean -gt 0) { $stddev / $mean } else { 0.0 }
-    $uncertainty = [math]::Max(0.08, [math]::Min(0.30, 0.75 * $coefficientVariation))
+    $selectionShift = if ($sampleMeanKbps -gt 0) { [math]::Abs($videoKbps - $sampleMeanKbps) / $sampleMeanKbps } else { 0.0 }
+    $uncertainty = [math]::Max(0.08, [math]::Min(0.35, (0.75 * $coefficientVariation) + (0.5 * $selectionShift)))
 
     $overhead = [math]::Max(0.0, $ContainerOverheadRatio)
     $totalKbps = $videoKbps + [math]::Max(0.0, $AuxiliaryBitrateKbps)
@@ -59,6 +94,10 @@ function Estimate-EOOutputSize {
 
     return [pscustomobject]@{
         VideoKbps              = $videoKbps
+        SampleMeanKbps         = $sampleMeanKbps
+        SampleMeanComplexity   = $sampleMeanComplexity
+        PopulationMeanComplexity = $populationMeanComplexity
+        SamplingBiasCorrectionApplied = $biasCorrectionApplied
         AuxiliaryKbps          = [double]$AuxiliaryBitrateKbps
         TotalKbps              = $totalKbps
         EstimatedBytes         = [long][math]::Round($estimatedBytes)

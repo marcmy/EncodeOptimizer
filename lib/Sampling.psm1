@@ -65,7 +65,7 @@ function Get-EOContentFeatures {
     foreach ($window in $AnalysisWindows) {
         $arguments = @(
             '-hide_banner','-nostdin','-ss',[string]$window.Start,'-t',[string]$window.Duration,'-i',$Path,
-            '-an','-sn','-dn','-vf','fps=2,scale=320:-2:flags=area,scdet=t=10,signalstats,metadata=print:file=-',
+            '-an','-sn','-dn','-vf','fps=2,scale=320:-2:flags=area,scdet=t=10,signalstats,bitplanenoise=bitplane=1,metadata=print:file=-',
             '-f','null','-'
         )
         if ($CommandRunner) {
@@ -82,6 +82,7 @@ function Get-EOContentFeatures {
         $yLow = @(Get-EOValuesFromScan $raw 'lavfi.signalstats.YLOW')
         $yHigh = @(Get-EOValuesFromScan $raw 'lavfi.signalstats.YHIGH')
         $yDif = @(Get-EOValuesFromScan $raw 'lavfi.signalstats.YDIF')
+        $bitPlaneNoise = @(Get-EOValuesFromScan $raw 'lavfi.bitplanenoise.0.1')
         $sceneScores = @(Get-EOValuesFromScan $raw 'lavfi.scd.score')
 
         $meanY = Get-EOAverage $yAvg 128
@@ -95,7 +96,10 @@ function Get-EOContentFeatures {
         $detail = Limit-EOUnit ($meanRange / 180.0)
         $dark = Limit-EOUnit ((72.0 - $meanY) / 64.0)
         $scene = Limit-EOUnit ($scenePeak / 30.0)
-        $noise = Limit-EOUnit ((Get-EOStdDev $yDif) / 10.0)
+        # bitplanenoise reports a direct 0..1 noisy-pixel ratio for the selected
+        # bit plane. YDIF variance is temporal activity and must not be reused as
+        # a grain/noise proxy because fast motion and cuts make it saturate.
+        $noise = Limit-EOUnit (Get-EOAverage $bitPlaneNoise 0.0)
         $gradient = Limit-EOUnit ((1.0 - $detail) * (1.0 - $dark) * 0.9)
         $static = Limit-EOUnit (1.0 - ($motion * 4.0))
 
