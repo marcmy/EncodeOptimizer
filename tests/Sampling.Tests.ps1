@@ -121,6 +121,23 @@ lavfi.scd.score=0
         @($selection.SearchSamples | Where-Object { $_.Start -in @(0,10) }).Count | Should -Be 0
     }
 
+    It 'does not force a negative-score tail window into temporal coverage when a nearby informative window exists' {
+        $windows = @(
+            (New-FeatureWindow 0 -Motion 0.4 -Detail 0.4 -Noise 0.3 -Scene 0.3),
+            (New-FeatureWindow 30 -Motion 0.8 -Detail 0.8 -Noise 0.8 -Dark 0.8 -Gradient 0.8 -Scene 0.8),
+            (New-FeatureWindow 60 -Motion 0.5 -Detail 0.5 -Noise 0.4 -Scene 0.4),
+            (New-FeatureWindow 80 -Motion 0.6 -Detail 0.6 -Noise 0.5 -Scene 0.5),
+            (New-FeatureWindow 90 -Motion 0.1 -Detail 0.1 -Noise 0.1 -Dark 0.4 -Gradient 0.4 -Scene 0.4 -Static 0.7 -Black 0.1)
+        )
+
+        $selection = Select-EOSamples -FeatureWindows $windows -Duration 100 -SearchCount 4 -VerificationCount 1 -SampleDuration 10
+        $searchStarts = @($selection.SearchSamples.Start)
+
+        $searchStarts | Should -Contain 80
+        $searchStarts | Should -Not -Contain 90
+        @($selection.SearchSamples | Where-Object { $_.Start -eq 80 -and $_.Reasons -contains 'temporal' }).Count | Should -Be 1
+    }
+
     It 'adapts clip length and count safely for short sources' {
         $windows = @((New-FeatureWindow 0 -Motion 0.6), (New-FeatureWindow 8 -Detail 0.7))
         $selection = Select-EOSamples -FeatureWindows $windows -Duration 18 -SearchCount 6 -VerificationCount 2 -SampleDuration 10

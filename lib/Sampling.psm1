@@ -209,8 +209,10 @@ function Select-EOSamples {
         if ($candidate -and (Get-EOFeatureValue $candidate $feature) -ge 0.5) { Add-SearchWindow $candidate $feature.ToLowerInvariant() }
     }
 
-    Add-SearchWindow ($usable | Select-Object -First 1) 'temporal'
-    Add-SearchWindow ($usable | Select-Object -Last 1) 'temporal'
+    $temporalUsable = @($usable | Where-Object { (Get-EOSampleScore $_) -ge 0.0 })
+    if ($temporalUsable.Count -eq 0) { $temporalUsable = $usable }
+    Add-SearchWindow ($temporalUsable | Select-Object -First 1) 'temporal'
+    Add-SearchWindow ($temporalUsable | Select-Object -Last 1) 'temporal'
 
     $remainingByScore = @($usable | Where-Object { -not $selected.Contains([string][double]$_.Start) } | Sort-Object @{ Expression = { Get-EOSampleScore $_ }; Descending = $true }, Start)
     foreach ($candidate in $remainingByScore) { if ($selected.Count -ge $targetSearch) { break }; Add-SearchWindow $candidate 'representative' }

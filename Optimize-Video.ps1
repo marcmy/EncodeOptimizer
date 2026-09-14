@@ -205,7 +205,7 @@ $sourceBytes = [long]$sourceProbe.Format.Size
 if ($sourceBytes -le 0) { $sourceBytes = [long]$inputItem.Length }
 
 $fingerprint = Get-EOSourceFingerprint -Path $inputPath
-$pipelineVersion = 'deterministic-reference-v6-nvenc-search-headroom'
+$pipelineVersion = 'deterministic-reference-v7-temporal-sampling'
 $encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.AnalysisArguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
 $policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumXpsnr,$policy.MinimumSsim,$policy.MinimumPsnr,$policy.MinimumSavingsRatio) -join '|'
 $cacheRoot = Get-EODefaultCacheRoot
