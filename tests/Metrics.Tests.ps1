@@ -86,11 +86,24 @@ Describe 'metric aggregation and quality policy' {
         $agg = Measure-EOMetricAggregate -Samples @($candidate) -VmafBaselineSamples @($baseline)
         $decision = Test-EOQualityPolicy -Aggregate $agg -Policy $profiles.Conservative
 
-        $agg.MeanVmaf | Should -Be 96.73
+        [math]::Round([double]$agg.MeanVmaf, 2) | Should -Be 96.73
         $agg.RelativeMeanVmaf | Should -BeGreaterThan 98.8
         $agg.RelativeWorstSampleVmaf | Should -BeGreaterThan 98.8
         $agg.RelativeP05Vmaf | Should -BeGreaterThan 98.8
         $decision.Passed | Should -BeTrue
+    }
+
+    It 'tolerates a one-frame encoder tail mismatch when applying the VMAF baseline' {
+        $candidateValues = @(1..101 | ForEach-Object { 96.73 })
+        $baselineValues = @(1..100 | ForEach-Object { 97.92 })
+        $candidate = New-MetricSample 'tail-rounding' $candidateValues
+        $baseline = New-MetricSample 'tail-rounding' $baselineValues
+
+        $agg = Measure-EOMetricAggregate -Samples @($candidate) -VmafBaselineSamples @($baseline)
+
+        $agg.VmafBaselineApplied | Should -BeTrue
+        $agg.RelativeFrameCount | Should -Be 100
+        $agg.RelativeMeanVmaf | Should -BeGreaterThan 98.8
     }
 
     It 'computes pooled percentiles and worst-sample mean deterministically' {

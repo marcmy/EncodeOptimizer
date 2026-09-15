@@ -146,14 +146,18 @@ function Measure-EOMetricAggregate {
                 throw "VMAF baseline sample '$baselineName' does not match candidate sample '$sampleName'."
             }
             $baselineFrames = @((Get-EOPropertyValue $baselineSample 'Frames' @()))
-            if ($baselineFrames.Count -ne $frames.Count) {
+            $frameCountDelta = [math]::Abs($baselineFrames.Count - $frames.Count)
+            if ($frameCountDelta -gt 1) {
                 throw "VMAF baseline frame count $($baselineFrames.Count) does not match candidate frame count $($frames.Count) for sample '$sampleName'."
             }
+            $pairedFrameCount = [math]::Min($baselineFrames.Count, $frames.Count)
             $baselineValues = [System.Collections.Generic.List[double]]::new()
             $relativeValues = [System.Collections.Generic.List[double]]::new()
-            for ($frameIndex = 0; $frameIndex -lt $frames.Count; $frameIndex++) {
+            $pairedCandidateVmafCount = 0
+            for ($frameIndex = 0; $frameIndex -lt $pairedFrameCount; $frameIndex++) {
                 $candidateVmaf = Get-EOPropertyValue $frames[$frameIndex] 'Vmaf'
                 $baselineVmaf = Get-EOPropertyValue $baselineFrames[$frameIndex] 'Vmaf'
+                if ($null -ne $candidateVmaf) { $pairedCandidateVmafCount++ }
                 if ($null -eq $candidateVmaf -or $null -eq $baselineVmaf) { continue }
                 $baselineValue = [double]$baselineVmaf
                 $relativeValue = 100.0 - ($baselineValue - [double]$candidateVmaf)
@@ -162,7 +166,7 @@ function Measure-EOMetricAggregate {
                 $relativeValues.Add($relativeValue)
                 $allRelativeVmaf.Add($relativeValue)
             }
-            if ($relativeValues.Count -ne $sampleVmaf.Count) {
+            if ($relativeValues.Count -ne $pairedCandidateVmafCount) {
                 throw "VMAF baseline coverage is incomplete for sample '$sampleName'."
             }
             $relativeSampleVmaf = @($relativeValues)
@@ -175,6 +179,7 @@ function Measure-EOMetricAggregate {
             FrameCount     = $frames.Count
             MeanVmaf       = $mean
             BaselineMeanVmaf = $baselineMeanVmaf
+            RelativeFrameCount = $relativeSampleVmaf.Count
             RelativeMeanVmaf = if ($relativeSampleVmaf.Count) { [double](($relativeSampleVmaf | Measure-Object -Average).Average) } else { $null }
             MinimumVmaf    = if ($sampleVmaf.Count) { [double](($sampleVmaf | Measure-Object -Minimum).Minimum) } else { $null }
             P05Vmaf        = if ($sampleVmaf.Count) { Get-EOPercentile $sampleVmaf 0.05 } else { $null }
@@ -205,6 +210,7 @@ function Measure-EOMetricAggregate {
         VmafRole        = $VmafRole
         VmafBaselineApplied = $useVmafBaseline
         FrameCount      = $allFrames.Count
+        RelativeFrameCount = $allRelativeVmaf.Count
         SampleCount     = $Samples.Count
         MeanVmaf        = $meanVmaf
         RelativeMeanVmaf = if ($relativeVmaf.Count) { [double](($relativeVmaf | Measure-Object -Average).Average) } else { $null }
