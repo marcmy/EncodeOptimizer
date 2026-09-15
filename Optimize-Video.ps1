@@ -205,7 +205,7 @@ $sourceBytes = [long]$sourceProbe.Format.Size
 if ($sourceBytes -le 0) { $sourceBytes = [long]$inputItem.Length }
 
 $fingerprint = Get-EOSourceFingerprint -Path $inputPath
-$pipelineVersion = 'deterministic-reference-v7-temporal-sampling'
+$pipelineVersion = 'deterministic-reference-v8-relative-vmaf'
 $encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.AnalysisArguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
 $policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumXpsnr,$policy.MinimumSsim,$policy.MinimumPsnr,$policy.MinimumSavingsRatio) -join '|'
 $cacheRoot = Get-EODefaultCacheRoot
@@ -239,6 +239,36 @@ foreach ($phase in @('Search','Verification')) {
         $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $inputPath -OutputPath $referencePath -Start ([double]$sample.Start) -Duration ([double]$sample.Duration) -VideoFilter $VideoFilter)
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $referenceArgs -Description "$phase reference sample $($i + 1)" | Out-Null
         $referencePaths[$phase].Add($referencePath)
+    }
+}
+
+$vmafBaselines = @{
+    Search = [System.Collections.Generic.List[object]]::new()
+    Verification = [System.Collections.Generic.List[object]]::new()
+}
+if ([string]$sampleMetricPlan.VmafRole -eq 'Primary' -and @($sampleMetricPlan.Metrics) -contains 'vmaf') {
+    $baselineMetricPlan = [pscustomobject]@{
+        Metrics = @('vmaf')
+        VmafRole = 'Primary'
+        AdvisoryToneMapFilter = $sampleMetricPlan.AdvisoryToneMapFilter
+        ReferenceMetricFilter = $sampleMetricPlan.ReferenceMetricFilter
+        CandidateMetricFilter = $sampleMetricPlan.CandidateMetricFilter
+    }
+    Write-Host 'Calibrating VMAF reference baselines...'
+    foreach ($phase in @('Search','Verification')) {
+        $phaseSamples = if ($phase -eq 'Search') { @($samplePlan.SearchSamples) } else { @($samplePlan.VerificationSamples) }
+        for ($i = 0; $i -lt $phaseSamples.Count; $i++) {
+            $sample = $phaseSamples[$i]
+            $referencePath = $referencePaths[$phase][$i]
+            $baselineDirectory = Join-Path $workRoot ("baseline-$Phase-s$($i + 1)")
+            if (Test-Path -LiteralPath $baselineDirectory) { Remove-Item -LiteralPath $baselineDirectory -Recurse -Force }
+            $baseline = Invoke-EOMetrics -ReferencePath $referencePath -CandidatePath $referencePath -MetricPlan $baselineMetricPlan -ReferenceStart 0 -Duration ([double]$sample.Duration) -SampleName ("$Phase-$($i + 1)") -FFmpegPath $resolvedFFmpeg -WorkDirectory $baselineDirectory
+            $baseline.Start = [double]$sample.Start
+            $vmafBaselines[$phase].Add($baseline)
+            if (-not $KeepSamples) {
+                Remove-Item -LiteralPath $baselineDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
@@ -279,12 +309,16 @@ $evaluator = {
         }
     }
 
-    $aggregate = Measure-EOMetricAggregate -Samples @($metricSamples) -VmafRole $sampleMetricPlan.VmafRole
+    $aggregateParameters = @{ Samples=@($metricSamples); VmafRole=$sampleMetricPlan.VmafRole }
+    $baselineSamples = @($vmafBaselines[$Phase])
+    if ($baselineSamples.Count) { $aggregateParameters.VmafBaselineSamples = $baselineSamples }
+    $aggregate = Measure-EOMetricAggregate @aggregateParameters
     $policyDecision = Test-EOQualityPolicy -Aggregate $aggregate -Policy $policy
     $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $containerDuration -PopulationComplexities $populationComplexities -AuxiliaryBitrateKbps $auxiliaryKbps
     return [pscustomobject]@{
         Quality=$Quality; Phase=$Phase; Passed=$policyDecision.Passed; MinimumMargin=$policyDecision.MinimumMargin; AuthoritativeMetric=$policyDecision.AuthoritativeMetric
         MeanVmaf=$aggregate.MeanVmaf; WorstSampleVmaf=$aggregate.WorstSampleVmaf; P05Vmaf=$aggregate.P05Vmaf
+        RelativeMeanVmaf=$aggregate.RelativeMeanVmaf; RelativeWorstSampleVmaf=$aggregate.RelativeWorstSampleVmaf; RelativeP05Vmaf=$aggregate.RelativeP05Vmaf
         MeanXpsnr=$aggregate.MeanXpsnr; MeanSsim=$aggregate.MeanSsim; MeanPsnr=$aggregate.MeanPsnr
         EstimatedBytes=$sizeEstimate.EstimatedBytes; SizeEstimate=$sizeEstimate; SampleResults=@($metricSamples); Aggregate=$aggregate; Failures=@($policyDecision.Failures)
     }

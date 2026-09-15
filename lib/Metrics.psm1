@@ -115,13 +115,20 @@ function Measure-EOMetricAggregate {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [object[]] $Samples,
-        [string] $VmafRole = 'Primary'
+        [string] $VmafRole = 'Primary',
+        [object[]] $VmafBaselineSamples = @()
     )
 
     $allFrames = [System.Collections.Generic.List[object]]::new()
+    $allRelativeVmaf = [System.Collections.Generic.List[double]]::new()
     $sampleAggregates = [System.Collections.Generic.List[object]]::new()
+    $useVmafBaseline = $VmafBaselineSamples.Count -gt 0
+    if ($useVmafBaseline -and $VmafBaselineSamples.Count -ne $Samples.Count) {
+        throw 'VMAF baseline sample count must match candidate sample count.'
+    }
 
-    foreach ($sample in $Samples) {
+    for ($sampleIndex = 0; $sampleIndex -lt $Samples.Count; $sampleIndex++) {
+        $sample = $Samples[$sampleIndex]
         $frames = @((Get-EOPropertyValue $sample 'Frames' @()))
         foreach ($frame in $frames) { $allFrames.Add($frame) }
         $mean = Get-EOAverageMetric $frames 'Vmaf'
@@ -129,14 +136,49 @@ function Measure-EOMetricAggregate {
             $value = Get-EOPropertyValue $_ 'Vmaf'
             if ($null -ne $value) { [double]$value }
         })
+        $relativeSampleVmaf = @()
+        $baselineMeanVmaf = $null
+        if ($useVmafBaseline) {
+            $baselineSample = $VmafBaselineSamples[$sampleIndex]
+            $sampleName = [string](Get-EOPropertyValue $sample 'Name' '')
+            $baselineName = [string](Get-EOPropertyValue $baselineSample 'Name' '')
+            if ($sampleName -and $baselineName -and $sampleName -ne $baselineName) {
+                throw "VMAF baseline sample '$baselineName' does not match candidate sample '$sampleName'."
+            }
+            $baselineFrames = @((Get-EOPropertyValue $baselineSample 'Frames' @()))
+            if ($baselineFrames.Count -ne $frames.Count) {
+                throw "VMAF baseline frame count $($baselineFrames.Count) does not match candidate frame count $($frames.Count) for sample '$sampleName'."
+            }
+            $baselineValues = [System.Collections.Generic.List[double]]::new()
+            $relativeValues = [System.Collections.Generic.List[double]]::new()
+            for ($frameIndex = 0; $frameIndex -lt $frames.Count; $frameIndex++) {
+                $candidateVmaf = Get-EOPropertyValue $frames[$frameIndex] 'Vmaf'
+                $baselineVmaf = Get-EOPropertyValue $baselineFrames[$frameIndex] 'Vmaf'
+                if ($null -eq $candidateVmaf -or $null -eq $baselineVmaf) { continue }
+                $baselineValue = [double]$baselineVmaf
+                $relativeValue = 100.0 - ($baselineValue - [double]$candidateVmaf)
+                $relativeValue = [math]::Max(0.0, [math]::Min(100.0, $relativeValue))
+                $baselineValues.Add($baselineValue)
+                $relativeValues.Add($relativeValue)
+                $allRelativeVmaf.Add($relativeValue)
+            }
+            if ($relativeValues.Count -ne $sampleVmaf.Count) {
+                throw "VMAF baseline coverage is incomplete for sample '$sampleName'."
+            }
+            $relativeSampleVmaf = @($relativeValues)
+            if ($baselineValues.Count) { $baselineMeanVmaf = [double](($baselineValues | Measure-Object -Average).Average) }
+        }
         $sampleAggregates.Add([pscustomobject]@{
             Name           = [string](Get-EOPropertyValue $sample 'Name' '')
             Start          = Get-EOPropertyValue $sample 'Start'
             Duration       = Get-EOPropertyValue $sample 'Duration'
             FrameCount     = $frames.Count
             MeanVmaf       = $mean
+            BaselineMeanVmaf = $baselineMeanVmaf
+            RelativeMeanVmaf = if ($relativeSampleVmaf.Count) { [double](($relativeSampleVmaf | Measure-Object -Average).Average) } else { $null }
             MinimumVmaf    = if ($sampleVmaf.Count) { [double](($sampleVmaf | Measure-Object -Minimum).Minimum) } else { $null }
             P05Vmaf        = if ($sampleVmaf.Count) { Get-EOPercentile $sampleVmaf 0.05 } else { $null }
+            RelativeP05Vmaf = if ($relativeSampleVmaf.Count) { Get-EOPercentile $relativeSampleVmaf 0.05 } else { $null }
             MeanXpsnr      = Get-EOAverageMetric $frames 'Xpsnr'
             MeanSsim       = Get-EOAverageMetric $frames 'Ssim'
             MeanPsnr       = Get-EOAverageMetric $frames 'Psnr'
@@ -152,21 +194,29 @@ function Measure-EOMetricAggregate {
 
     $validSamples = @($sampleAggregates | Where-Object { $null -ne $_.MeanVmaf })
     $worst = if ($validSamples.Count) { $validSamples | Sort-Object MeanVmaf, Name | Select-Object -First 1 } else { $null }
+    $validRelativeSamples = @($sampleAggregates | Where-Object { $null -ne $_.RelativeMeanVmaf })
+    $relativeWorst = if ($validRelativeSamples.Count) { $validRelativeSamples | Sort-Object RelativeMeanVmaf, Name | Select-Object -First 1 } else { $null }
 
     $meanVmaf = if ($vmaf.Count) { [double](($vmaf | Measure-Object -Average).Average) } else { $null }
     $minimumVmaf = if ($vmaf.Count) { [double](($vmaf | Measure-Object -Minimum).Minimum) } else { $null }
+    $relativeVmaf = @($allRelativeVmaf)
 
     return [pscustomobject]@{
         VmafRole        = $VmafRole
+        VmafBaselineApplied = $useVmafBaseline
         FrameCount      = $allFrames.Count
         SampleCount     = $Samples.Count
         MeanVmaf        = $meanVmaf
+        RelativeMeanVmaf = if ($relativeVmaf.Count) { [double](($relativeVmaf | Measure-Object -Average).Average) } else { $null }
         MinimumVmaf     = $minimumVmaf
         P01Vmaf         = if ($vmaf.Count) { Get-EOPercentile $vmaf 0.01 } else { $null }
         P05Vmaf         = if ($vmaf.Count) { Get-EOPercentile $vmaf 0.05 } else { $null }
+        RelativeP05Vmaf = if ($relativeVmaf.Count) { Get-EOPercentile $relativeVmaf 0.05 } else { $null }
         P10Vmaf         = if ($vmaf.Count) { Get-EOPercentile $vmaf 0.10 } else { $null }
         WorstSampleVmaf = if ($worst) { [double]$worst.MeanVmaf } else { $null }
         WorstSampleName = if ($worst) { [string]$worst.Name } else { $null }
+        RelativeWorstSampleVmaf = if ($relativeWorst) { [double]$relativeWorst.RelativeMeanVmaf } else { $null }
+        RelativeWorstSampleName = if ($relativeWorst) { [string]$relativeWorst.Name } else { $null }
         MeanXpsnr       = Get-EOAverageMetric @($allFrames) 'Xpsnr'
         MeanSsim        = Get-EOAverageMetric @($allFrames) 'Ssim'
         MeanPsnr        = Get-EOAverageMetric @($allFrames) 'Psnr'
@@ -187,12 +237,14 @@ function Test-EOQualityPolicy {
     $authoritativeMetric = if ($role -eq 'Primary') { 'VMAF' } else { 'Secondary' }
 
     if ($role -eq 'Primary') {
+        $useRelativeVmaf = [bool](Get-EOPropertyValue $Aggregate 'VmafBaselineApplied' $false)
         foreach ($check in @(
-            @{ Name='MeanVmaf'; Label='Mean VMAF'; Threshold=[double]$Policy.MeanVmaf; Scale=1.0 },
-            @{ Name='WorstSampleVmaf'; Label='Worst-sample VMAF'; Threshold=[double]$Policy.WorstSampleVmaf; Scale=1.0 },
-            @{ Name='P05Vmaf'; Label='P05 VMAF'; Threshold=[double]$Policy.P05Vmaf; Scale=1.0 }
+            @{ Name='MeanVmaf'; RelativeName='RelativeMeanVmaf'; Label='Mean VMAF'; Threshold=[double]$Policy.MeanVmaf; Scale=1.0 },
+            @{ Name='WorstSampleVmaf'; RelativeName='RelativeWorstSampleVmaf'; Label='Worst-sample VMAF'; Threshold=[double]$Policy.WorstSampleVmaf; Scale=1.0 },
+            @{ Name='P05Vmaf'; RelativeName='RelativeP05Vmaf'; Label='P05 VMAF'; Threshold=[double]$Policy.P05Vmaf; Scale=1.0 }
         )) {
-            $value = Get-EOPropertyValue $Aggregate $check.Name
+            $metricName = if ($useRelativeVmaf) { $check.RelativeName } else { $check.Name }
+            $value = Get-EOPropertyValue $Aggregate $metricName
             if ($null -eq $value) {
                 $failures.Add("$($check.Label) unavailable")
                 $margins[$check.Name] = $null

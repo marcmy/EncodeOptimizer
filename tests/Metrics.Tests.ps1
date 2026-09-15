@@ -79,6 +79,20 @@ Describe 'source-relative metric planning' {
 }
 
 Describe 'metric aggregation and quality policy' {
+    It 'normalizes primary VMAF against the reference self-score before applying policy thresholds' {
+        $candidate = New-MetricSample 'high-motion' (@(1..100 | ForEach-Object { 96.73 }))
+        $baseline = New-MetricSample 'high-motion' (@(1..100 | ForEach-Object { 97.92 }))
+
+        $agg = Measure-EOMetricAggregate -Samples @($candidate) -VmafBaselineSamples @($baseline)
+        $decision = Test-EOQualityPolicy -Aggregate $agg -Policy $profiles.Conservative
+
+        $agg.MeanVmaf | Should -Be 96.73
+        $agg.RelativeMeanVmaf | Should -BeGreaterThan 98.8
+        $agg.RelativeWorstSampleVmaf | Should -BeGreaterThan 98.8
+        $agg.RelativeP05Vmaf | Should -BeGreaterThan 98.8
+        $decision.Passed | Should -BeTrue
+    }
+
     It 'computes pooled percentiles and worst-sample mean deterministically' {
         $samples = @(
             (New-MetricSample 'easy' (@(1..50 | ForEach-Object { 99.0 }))),

@@ -54,6 +54,7 @@ function New-EOReport {
             [pscustomobject]@{
                 Name=[string](Get-EOReportProperty $_ 'Name' ''); Start=Get-EOReportProperty $_ 'Start'; Duration=Get-EOReportProperty $_ 'Duration'
                 FrameCount=[int](Get-EOReportProperty $_ 'FrameCount' 0); MeanVmaf=Get-EOReportProperty $_ 'MeanVmaf'; P05Vmaf=Get-EOReportProperty $_ 'P05Vmaf'
+                BaselineMeanVmaf=Get-EOReportProperty $_ 'BaselineMeanVmaf'; RelativeMeanVmaf=Get-EOReportProperty $_ 'RelativeMeanVmaf'; RelativeP05Vmaf=Get-EOReportProperty $_ 'RelativeP05Vmaf'
                 MinimumVmaf=Get-EOReportProperty $_ 'MinimumVmaf'; MeanXpsnr=Get-EOReportProperty $_ 'MeanXpsnr'; MeanSsim=Get-EOReportProperty $_ 'MeanSsim'; MeanPsnr=Get-EOReportProperty $_ 'MeanPsnr'
                 CandidateBytes=Get-EOReportProperty $_ 'CandidateBytes'; CandidateKbps=Get-EOReportProperty $_ 'CandidateKbps'
             }
@@ -61,6 +62,7 @@ function New-EOReport {
         [pscustomobject]@{
             Phase=Get-EOReportProperty $_ 'Phase'; Quality=Get-EOReportProperty $_ 'Quality'; Passed=[bool](Get-EOReportProperty $_ 'Passed' $false)
             MeanVmaf=Get-EOReportProperty $_ 'MeanVmaf'; WorstSampleVmaf=Get-EOReportProperty $_ 'WorstSampleVmaf'; P05Vmaf=Get-EOReportProperty $_ 'P05Vmaf'
+            RelativeMeanVmaf=Get-EOReportProperty $_ 'RelativeMeanVmaf'; RelativeWorstSampleVmaf=Get-EOReportProperty $_ 'RelativeWorstSampleVmaf'; RelativeP05Vmaf=Get-EOReportProperty $_ 'RelativeP05Vmaf'
             MinimumMargin=Get-EOReportProperty $_ 'MinimumMargin'; EstimatedBytes=Get-EOReportProperty $_ 'EstimatedBytes'; Samples=$sampleRows
         }
     })
@@ -109,6 +111,7 @@ function Format-EOHumanReport {
         $lines.Add("Quality  : $($Report.Selected.Quality)"); $m=$Report.Selected.Metrics
         if ($m) {
             if ($null -ne (Get-EOReportProperty $m 'MeanVmaf')) { $lines.Add("VMAF     : mean $([math]::Round([double]$m.MeanVmaf,3)), worst sample $([math]::Round([double]$m.WorstSampleVmaf,3)), P05 $([math]::Round([double]$m.P05Vmaf,3))") }
+            if ($null -ne (Get-EOReportProperty $m 'RelativeMeanVmaf')) { $lines.Add("VMAF rel : mean $([math]::Round([double]$m.RelativeMeanVmaf,3)), worst sample $([math]::Round([double]$m.RelativeWorstSampleVmaf,3)), P05 $([math]::Round([double]$m.RelativeP05Vmaf,3))") }
             if ($null -ne (Get-EOReportProperty $m 'MeanXpsnr')) { $lines.Add("XPSNR    : $([math]::Round([double]$m.MeanXpsnr,3)) dB") }
             if ($null -ne (Get-EOReportProperty $m 'MeanSsim')) { $lines.Add("SSIM     : $([math]::Round([double]$m.MeanSsim,6))") }
             if ($null -ne (Get-EOReportProperty $m 'MeanPsnr')) { $lines.Add("PSNR     : $([math]::Round([double]$m.MeanPsnr,3)) dB") }
