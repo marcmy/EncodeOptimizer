@@ -37,6 +37,8 @@ $progressState = [pscustomobject]@{
     StartedAt = [DateTimeOffset]::Now
     CompletedUnits = 0
     TotalUnits = 1
+    LiveActive = $false
+    LastLiveLength = 0
 }
 
 function Write-EOProgress {
@@ -46,7 +48,8 @@ function Write-EOProgress {
         [Parameter(Mandatory)][string]$Action,
         [string]$Detail = '',
         [int]$Advance = 0,
-        [switch]$Complete
+        [switch]$Complete,
+        [switch]$Live
     )
 
     if ($Complete) {
@@ -63,7 +66,20 @@ function Write-EOProgress {
     $elapsed = [DateTimeOffset]::Now - $progressState.StartedAt
     $elapsedText = $elapsed.ToString('hh\:mm\:ss')
     $message = if ([string]::IsNullOrWhiteSpace($Detail)) { $Action } else { "$Action | $Detail" }
-    Write-Host ("[{0,6:0.0}%] {1,-9} {2} | {3} | elapsed {4}" -f $percent, $Phase.ToUpperInvariant(), $message, "$($progressState.CompletedUnits)/$($progressState.TotalUnits) units", $elapsedText)
+    $line = "[{0,6:0.0}%] {1,-9} {2} | {3} | elapsed {4}" -f $percent, $Phase.ToUpperInvariant(), $message, "$($progressState.CompletedUnits)/$($progressState.TotalUnits) units", $elapsedText
+    if ($Live) {
+        $padding = [math]::Max(0, [int]$progressState.LastLiveLength - $line.Length)
+        Write-Host -NoNewline ("`r" + $line + (' ' * $padding))
+        $progressState.LiveActive = $true
+        $progressState.LastLiveLength = $line.Length
+        return
+    }
+    if ($progressState.LiveActive) {
+        Write-Host
+        $progressState.LiveActive = $false
+        $progressState.LastLiveLength = 0
+    }
+    Write-Host $line
 }
 
 function Get-EOProgressMetricSummary {
@@ -279,7 +295,7 @@ $progressState.TotalUnits = [math]::Max(1, $analysisWindows.Count + $maxSearchSa
 Write-EOProgress -Phase 'INIT' -Action 'work plan ready' -Detail ("complexity $($analysisWindows.Count) windows | references up to $($maxSearchSampleCount + $maxVerificationSampleCount) | search up to $maxSearchEvaluations quality tests | verification up to $maxVerificationEvaluations quality tests")
 $features = Get-EOContentFeatures -Path $inputPath -AnalysisWindows $analysisWindows -FFmpegPath $resolvedFFmpeg -ProgressCallback {
     param($Completed,$Total,$Window,$Feature)
-    Write-EOProgress -Phase 'ANALYSIS' -Action ("window $Completed/$Total") -Detail ("start $([math]::Round([double]$Window.Start,3))s | motion $([math]::Round([double]$Feature.Motion,2)) detail $([math]::Round([double]$Feature.Detail,2)) noise $([math]::Round([double]$Feature.Noise,2))") -Advance 1
+    Write-EOProgress -Phase 'ANALYSIS' -Action ("window $Completed/$Total") -Detail ("start $([math]::Round([double]$Window.Start,3))s | motion $([math]::Round([double]$Feature.Motion,2)) detail $([math]::Round([double]$Feature.Detail,2)) noise $([math]::Round([double]$Feature.Noise,2))") -Advance 1 -Live
 }
 $samplePlan = Select-EOSamples -FeatureWindows $features -Duration $samplingDuration
 $actualSearchSampleCount = @($samplePlan.SearchSamples).Count
@@ -301,18 +317,19 @@ $referencePaths = @{
     Verification = [System.Collections.Generic.List[string]]::new()
 }
 
-Write-Host 'Preparing deterministic lossless reference samples...'
+Write-EOProgress -Phase 'REFERENCE' -Action 'preparing lossless references' -Detail ("search $actualSearchSampleCount | verification $actualVerificationSampleCount")
 foreach ($phase in @('Search','Verification')) {
     $phaseSamples = if ($phase -eq 'Search') { @($samplePlan.SearchSamples) } else { @($samplePlan.VerificationSamples) }
     for ($i = 0; $i -lt $phaseSamples.Count; $i++) {
         $sample = $phaseSamples[$i]
         $referencePath = Join-Path $referenceRoot ("$phase-s$($i + 1).mkv")
         $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $inputPath -OutputPath $referencePath -Start ([double]$sample.Start) -Duration ([double]$sample.Duration) -VideoFilter $VideoFilter)
-        Write-EOProgress -Phase 'REFERENCE' -Action ("$phase $($i + 1)/$($phaseSamples.Count)") -Detail ("FFV1 sample | start $([math]::Round([double]$sample.Start,3))s | duration $([math]::Round([double]$sample.Duration,3))s")
+        Write-EOProgress -Phase 'REFERENCE' -Action ("$phase $($i + 1)/$($phaseSamples.Count)") -Detail ("FFV1 sample | start $([math]::Round([double]$sample.Start,3))s | duration $([math]::Round([double]$sample.Duration,3))s") -Live
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $referenceArgs -Description "$phase reference sample $($i + 1)" | Out-Null
         $referencePaths[$phase].Add($referencePath)
-        Write-EOProgress -Phase 'REFERENCE' -Action ("$phase $($i + 1)/$($phaseSamples.Count) complete") -Detail 'lossless reference ready' -Advance 1
+        Write-EOProgress -Phase 'REFERENCE' -Action ("$phase $($i + 1)/$($phaseSamples.Count) ready") -Detail 'lossless reference ready' -Advance 1 -Live
     }
+    Write-EOProgress -Phase 'REFERENCE' -Action ("$phase references complete") -Detail ("$($phaseSamples.Count) lossless samples ready")
 }
 
 $vmafBaselines = @{
@@ -327,7 +344,7 @@ if ([string]$sampleMetricPlan.VmafRole -eq 'Primary' -and @($sampleMetricPlan.Me
         ReferenceMetricFilter = $sampleMetricPlan.ReferenceMetricFilter
         CandidateMetricFilter = $sampleMetricPlan.CandidateMetricFilter
     }
-    Write-Host 'Calibrating VMAF reference baselines...'
+    Write-EOProgress -Phase 'BASELINE' -Action 'calibrating VMAF references' -Detail ("search $actualSearchSampleCount | verification $actualVerificationSampleCount")
     foreach ($phase in @('Search','Verification')) {
         $phaseSamples = if ($phase -eq 'Search') { @($samplePlan.SearchSamples) } else { @($samplePlan.VerificationSamples) }
         for ($i = 0; $i -lt $phaseSamples.Count; $i++) {
@@ -335,16 +352,17 @@ if ([string]$sampleMetricPlan.VmafRole -eq 'Primary' -and @($sampleMetricPlan.Me
             $referencePath = $referencePaths[$phase][$i]
             $baselineDirectory = Join-Path $workRoot ("baseline-$Phase-s$($i + 1)")
             if (Test-Path -LiteralPath $baselineDirectory) { Remove-Item -LiteralPath $baselineDirectory -Recurse -Force }
-            Write-EOProgress -Phase 'BASELINE' -Action ("$phase $($i + 1)/$($phaseSamples.Count)") -Detail ("self-VMAF calibration | start $([math]::Round([double]$sample.Start,3))s")
+            Write-EOProgress -Phase 'BASELINE' -Action ("$phase $($i + 1)/$($phaseSamples.Count)") -Detail ("self-VMAF calibration | start $([math]::Round([double]$sample.Start,3))s") -Live
             $baseline = Invoke-EOMetrics -ReferencePath $referencePath -CandidatePath $referencePath -MetricPlan $baselineMetricPlan -ReferenceStart 0 -Duration ([double]$sample.Duration) -SampleName ("$Phase-$($i + 1)") -FFmpegPath $resolvedFFmpeg -WorkDirectory $baselineDirectory
             $baseline.Start = [double]$sample.Start
             $vmafBaselines[$phase].Add($baseline)
             $baselineAggregate = Measure-EOMetricAggregate -Samples @($baseline) -VmafRole 'Primary'
-            Write-EOProgress -Phase 'BASELINE' -Action ("$phase $($i + 1)/$($phaseSamples.Count) complete") -Detail (Get-EOProgressMetricSummary $baselineAggregate) -Advance 1
+            Write-EOProgress -Phase 'BASELINE' -Action ("$phase $($i + 1)/$($phaseSamples.Count) ready") -Detail (Get-EOProgressMetricSummary $baselineAggregate) -Advance 1 -Live
             if (-not $KeepSamples) {
                 Remove-Item -LiteralPath $baselineDirectory -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+        Write-EOProgress -Phase 'BASELINE' -Action ("$phase baselines complete") -Detail ("$($phaseSamples.Count) self-VMAF calibrations ready")
     }
 }
 
@@ -372,7 +390,7 @@ $evaluator = {
         $referencePath = $referencePaths[$Phase][$sampleIndex - 1]
         $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
         $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $analysisContainerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -Analysis)
-        Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality sample $sampleIndex/$sampleCount") -Detail ("candidate encode + metrics | start $([math]::Round([double]$sample.Start,3))s | duration $([math]::Round([double]$sample.Duration,3))s")
+        Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality sample $sampleIndex/$sampleCount") -Detail ("candidate encode + metrics | start $([math]::Round([double]$sample.Start,3))s | duration $([math]::Round([double]$sample.Duration,3))s") -Live
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $candidateArgs -Description "candidate sample encode q$Quality" | Out-Null
 
         $metricDirectory = Join-Path $sampleDirectory 'metrics'
@@ -383,7 +401,7 @@ $evaluator = {
         $sizeSamples.Add([pscustomobject]@{ CandidateKbps=$metric.CandidateKbps; Complexity=$metric.Complexity; Duration=[double]$sample.Duration })
         $sampleAggregate = Measure-EOMetricAggregate -Samples @($metric) -VmafRole $sampleMetricPlan.VmafRole
         $bitrateText = if ($null -ne $metric.CandidateKbps) { "bitrate $([math]::Round([double]$metric.CandidateKbps,1)) kbps" } else { 'bitrate unavailable' }
-        Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality sample $sampleIndex/$sampleCount complete") -Detail ("$(Get-EOProgressMetricSummary $sampleAggregate) | $bitrateText") -Advance 1
+        Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality sample $sampleIndex/$sampleCount ready") -Detail ("$(Get-EOProgressMetricSummary $sampleAggregate) | $bitrateText") -Advance 1 -Live
 
         if (-not $KeepSamples) {
             Remove-Item -LiteralPath $candidatePath -Force -ErrorAction SilentlyContinue
