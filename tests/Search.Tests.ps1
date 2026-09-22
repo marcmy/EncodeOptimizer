@@ -98,6 +98,28 @@ Describe 'adaptive quality search' {
         $result.Rationale -join ' ' | Should -Match 'savings'
     }
 
+    It 'uses the larger same-quality phase estimate when search and verification disagree' {
+        $encoder = New-TestEncoderProfile
+        $evaluator = {
+            param($Quality, $Samples, $Phase)
+            $estimatedBytes = if ($Phase -eq 'Search') { 120000000 } else { 80000000 }
+            $result = New-FakeResult -Quality $Quality -Passed:($Quality -le 17) -Phase $Phase -EstimatedBytes $estimatedBytes
+            $result | Add-Member -NotePropertyName SizeEstimate -NotePropertyValue ([pscustomobject]@{
+                EstimatedBytes = $estimatedBytes
+                LowerBytes = $estimatedBytes - 5000000
+                UpperBytes = $estimatedBytes + 5000000
+                VideoKbps = 1000.0
+            })
+            return $result
+        }
+        $result = Find-EOOptimalQuality -EncoderProfile $encoder -Policy $profiles.Balanced -SearchSamples @('s1') -VerificationSamples @('v1') -Evaluator $evaluator -SourceBytes 100000000 -MinimumSavingsRatio 0.10
+
+        $result.Decision | Should -Be 'KEEP_SOURCE'
+        $result.EstimatedBytes | Should -Be 120000000
+        $result.SizeEstimateSource | Should -Be 'Search'
+        $result.SizeEstimateDisagreementRatio | Should -Be 0.5
+    }
+
     It 'does not KEEP_SOURCE merely for low savings when a requested transform makes re-encoding mandatory' {
         $encoder = New-TestEncoderProfile
         $evaluator = {

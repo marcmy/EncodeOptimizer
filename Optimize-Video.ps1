@@ -442,7 +442,13 @@ $progressState.TotalUnits = [math]::Max(1, $analysisWindows.Count + $actualSearc
 Write-EOProgress -Phase 'SEARCH' -Action 'quality search complete' -Detail ("search tests $(@($searchResult.SearchEvaluations).Count) | verification tests $(@($searchResult.VerificationEvaluations).Count) | decision $($searchResult.Decision)")
 if (-not $KeepSamples) { Remove-Item -LiteralPath $referenceRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
-$finalSizeEstimate = if ($searchResult.FinalEvaluation -and $searchResult.FinalEvaluation.PSObject.Properties['SizeEstimate']) { $searchResult.FinalEvaluation.SizeEstimate } else { $null }
+$finalSizeEstimate = if ($searchResult.PSObject.Properties['SizeEstimate']) { $searchResult.SizeEstimate } elseif ($searchResult.FinalEvaluation -and $searchResult.FinalEvaluation.PSObject.Properties['SizeEstimate']) { $searchResult.FinalEvaluation.SizeEstimate } else { $null }
+$sizeEstimateDisagreementRatio = if ($searchResult.PSObject.Properties['SizeEstimateDisagreementRatio']) { $searchResult.SizeEstimateDisagreementRatio } else { $null }
+if ($null -ne $sizeEstimateDisagreementRatio -and [double]$sizeEstimateDisagreementRatio -ge 0.25) {
+    $sizeEstimatePercent = [math]::Round([double]$sizeEstimateDisagreementRatio * 100.0, 1)
+    $sizeEstimateSource = if ($searchResult.PSObject.Properties['SizeEstimateSource']) { [string]$searchResult.SizeEstimateSource } else { 'conservative' }
+    $warnings.Add("Search and verification size estimates differ by $sizeEstimatePercent%; the $sizeEstimateSource estimate is used conservatively.")
+}
 $hardReasons = @('motion','detail','noise','dark','gradient','scene')
 $reasonSet = @($samplePlan.SearchSamples.Reasons | ForEach-Object { $_ } | Where-Object { $_ -in $hardReasons } | Sort-Object -Unique)
 $coverageScore = [math]::Min(1.0, (@($samplePlan.SearchSamples).Count + @($samplePlan.VerificationSamples).Count) / 8.0)

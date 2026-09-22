@@ -187,7 +187,7 @@ Batch mode additionally writes a per-file sidecar JSON under the selected output
 season1\episode.encodeoptimizer.json
 ```
 
-Reports include the source summary, selected samples, candidate evaluations, quality metrics, estimated size/savings, confidence, warnings, rationale, alternatives, and the exact final FFmpeg command when an encode is recommended.
+Reports include the source summary, selected samples, candidate evaluations, quality metrics, estimated size/savings, confidence, warnings, rationale, alternatives, and the exact final FFmpeg command when an encode is recommended. When search and verification produce materially different size estimates at the selected quality, the larger estimate is used for the savings decision and the disagreement is reported as a warning.
 
 Local history may seed a future adaptive search for closely matching content classes, but history never bypasses measured verification.
 

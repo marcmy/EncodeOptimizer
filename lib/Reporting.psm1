@@ -84,7 +84,10 @@ function New-EOReport {
         Encoder=[pscustomobject]@{ Name=$EncoderName; Rationale=@($EncoderRationale) }
         Samples=[pscustomobject]@{ Search=@((Get-EOReportProperty $SamplePlan 'SearchSamples' @())); Verification=@((Get-EOReportProperty $SamplePlan 'VerificationSamples' @())) }
         Candidates=$candidateRows; Selected=$selected
-        EstimatedSavings=[pscustomobject]@{ Ratio=$savings; EstimatedBytes=$estimatedBytes; LowerBytes=Get-EOReportProperty $SizeEstimate 'LowerBytes'; UpperBytes=Get-EOReportProperty $SizeEstimate 'UpperBytes'; VideoKbps=Get-EOReportProperty $SizeEstimate 'VideoKbps' }
+        EstimatedSavings=[pscustomobject]@{
+            Ratio=$savings; EstimatedBytes=$estimatedBytes; LowerBytes=Get-EOReportProperty $SizeEstimate 'LowerBytes'; UpperBytes=Get-EOReportProperty $SizeEstimate 'UpperBytes'; VideoKbps=Get-EOReportProperty $SizeEstimate 'VideoKbps'
+            Source=Get-EOReportProperty $SearchResult 'SizeEstimateSource'; DisagreementRatio=Get-EOReportProperty $SearchResult 'SizeEstimateDisagreementRatio'
+        }
         Confidence=$Confidence; Warnings=@($Warnings); Rationale=@((Get-EOReportProperty $SearchResult 'Rationale' @()))
         FinalCommand=[pscustomobject]@{ Arguments=$commandArguments; Text=if ($commandArguments.Count) { Join-EOCommandLine $commandArguments } else { '' } }
         Alternatives=$Alternatives

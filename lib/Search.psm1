@@ -283,6 +283,9 @@ function Find-EOOptimalQuality {
             FinalEvaluation = $null
             EstimatedBytes = $null
             SavingsRatio = $null
+            SizeEstimate = $null
+            SizeEstimateSource = $null
+            SizeEstimateDisagreementRatio = $null
             MinimumSavingsRatio = $requiredSavings
             Rationale = @($rationale)
             SearchStable = $false
@@ -320,6 +323,9 @@ function Find-EOOptimalQuality {
             FinalEvaluation = $null
             EstimatedBytes = $null
             SavingsRatio = $null
+            SizeEstimate = $null
+            SizeEstimateSource = $null
+            SizeEstimateDisagreementRatio = $null
             MinimumSavingsRatio = $requiredSavings
             Rationale = @($rationale)
             SearchStable = $false
@@ -332,7 +338,50 @@ function Find-EOOptimalQuality {
     }
 
     $finalResult = if ($verificationResults.Count) { $verificationResults[-1] } elseif ($searchCache.ContainsKey($selectedQuality)) { $searchCache[$selectedQuality] } else { $searchWinner }
-    $estimatedBytes = Get-EOSearchProperty $finalResult 'EstimatedBytes'
+    $searchEstimateResult = if ($searchCache.ContainsKey($selectedQuality)) { $searchCache[$selectedQuality] } else { $null }
+    $verificationEstimateResult = if ($verificationResults.Count) { $verificationResults[-1] } else { $null }
+    $sizeEstimateCandidates = [System.Collections.Generic.List[object]]::new()
+    foreach ($candidate in @(
+        [pscustomobject]@{ Source = 'Search'; Result = $searchEstimateResult }
+        [pscustomobject]@{ Source = 'Verification'; Result = $verificationEstimateResult }
+    )) {
+        $candidateBytes = Get-EOSearchProperty $candidate.Result 'EstimatedBytes'
+        if ($null -ne $candidateBytes -and [double]$candidateBytes -gt 0) {
+            $sizeEstimateCandidates.Add([pscustomobject]@{
+                Source = $candidate.Source
+                Result = $candidate.Result
+                EstimatedBytes = [double]$candidateBytes
+            })
+        }
+    }
+
+    # Search clips are deliberately difficult while verification clips are independent.
+    # Use the larger same-quality estimate so an optimistic phase cannot turn a marginal
+    # source-size comparison into an automatic encode recommendation.
+    $selectedSizeEstimateCandidate = if ($sizeEstimateCandidates.Count) {
+        $sizeEstimateCandidates | Sort-Object EstimatedBytes -Descending | Select-Object -First 1
+    } else {
+        $null
+    }
+    $sizeEstimate = if ($null -ne $selectedSizeEstimateCandidate) {
+        Get-EOSearchProperty $selectedSizeEstimateCandidate.Result 'SizeEstimate'
+    } else {
+        Get-EOSearchProperty $finalResult 'SizeEstimate'
+    }
+    $sizeEstimateSource = if ($null -ne $selectedSizeEstimateCandidate) { [string]$selectedSizeEstimateCandidate.Source } else { 'FinalEvaluation' }
+    $sizeEstimateDisagreementRatio = $null
+    if ($sizeEstimateCandidates.Count -ge 2) {
+        $smallestEstimate = [double](($sizeEstimateCandidates | Measure-Object -Property EstimatedBytes -Minimum).Minimum)
+        $largestEstimate = [double](($sizeEstimateCandidates | Measure-Object -Property EstimatedBytes -Maximum).Maximum)
+        if ($smallestEstimate -gt 0) {
+            $sizeEstimateDisagreementRatio = ($largestEstimate / $smallestEstimate) - 1.0
+        }
+    }
+    $estimatedBytes = if ($null -ne $selectedSizeEstimateCandidate) {
+        [long][math]::Round([double]$selectedSizeEstimateCandidate.EstimatedBytes)
+    } else {
+        Get-EOSearchProperty $finalResult 'EstimatedBytes'
+    }
     if ($null -eq $estimatedBytes -and $searchCache.ContainsKey($selectedQuality)) { $estimatedBytes = Get-EOSearchProperty $searchCache[$selectedQuality] 'EstimatedBytes' }
     $savingsRatio = if ($SourceBytes -gt 0 -and $null -ne $estimatedBytes) { 1.0 - ([double]$estimatedBytes / [double]$SourceBytes) } else { $null }
 
@@ -353,6 +402,9 @@ function Find-EOOptimalQuality {
         FinalEvaluation = $finalResult
         EstimatedBytes = $estimatedBytes
         SavingsRatio = $savingsRatio
+        SizeEstimate = $sizeEstimate
+        SizeEstimateSource = $sizeEstimateSource
+        SizeEstimateDisagreementRatio = $sizeEstimateDisagreementRatio
         MinimumSavingsRatio = $requiredSavings
         Rationale = @($rationale)
         SearchStable = ($selectedQuality -eq $initialVerificationQuality)
