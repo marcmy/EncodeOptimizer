@@ -52,7 +52,10 @@ Describe 'source-relative metric planning' {
             'XPSNR average, 2 frames  y: 55.1488  u: 60.0000  v: 60.0000  (minimum: 10.2977)'
         ) | Set-Content -LiteralPath $statsPath
 
-        $parsed = InModuleScope Metrics { Read-EOStatsFile -Path $using:statsPath -Metric 'xpsnr' }
+        $parsed = InModuleScope Metrics -Parameters @{ Path = $statsPath } {
+            param($Path)
+            Read-EOStatsFile -Path $Path -Metric 'xpsnr'
+        }
 
         $parsed.Count | Should -Be 2
         $parsed[0] | Should -Be 10.2977
