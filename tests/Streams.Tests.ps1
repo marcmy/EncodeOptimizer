@@ -185,6 +185,6 @@ Describe 'container and stream preservation' {
         Get-Command New-EOReferenceSampleArguments -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         $result = @(New-EOReferenceSampleArguments -InputPath 'input.mkv' -OutputPath 'reference.mkv' -Start 2.137 -Duration 3 -VideoFilter 'crop=160:180:80:0')
 
-        ($result -join '|') | Should -BeExactly '-hide_banner|-nostdin|-ss|2.137|-i|input.mkv|-t|3|-map|0:v:0|-an|-sn|-dn|-vf|crop=160:180:80:0|-c:v|ffv1|-level|3|-g|1|-fps_mode|passthrough|reference.mkv'
+        ($result -join '|') | Should -BeExactly '-hide_banner|-nostdin|-ss|2.137|-i|input.mkv|-t|3|-map|0:v:0|-an|-sn|-dn|-vf|crop=160:180:80:0,setpts=PTS-STARTPTS|-c:v|ffv1|-level|3|-g|1|-fps_mode|passthrough|reference.mkv'
     }
 }

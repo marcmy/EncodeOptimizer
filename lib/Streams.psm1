@@ -251,7 +251,13 @@ function New-EOReferenceSampleArguments {
     foreach ($item in @('-hide_banner','-nostdin','-ss',$Start.ToString($culture),'-i',$InputPath,'-t',$Duration.ToString($culture),'-map','0:v:0','-an','-sn','-dn')) {
         $args.Add([string]$item)
     }
-    if ($VideoFilter) { $args.Add('-vf'); $args.Add($VideoFilter) }
+    $referenceFilters = [System.Collections.Generic.List[string]]::new()
+    if ($VideoFilter) { $referenceFilters.Add($VideoFilter) }
+    # Analysis references must start at a deterministic zero timestamp. Without this,
+    # a non-zero source/sample start can be rounded differently by the lossless and
+    # candidate containers, producing a frame-shifted metric comparison.
+    $referenceFilters.Add('setpts=PTS-STARTPTS')
+    $args.Add('-vf'); $args.Add(($referenceFilters -join ','))
     foreach ($item in @('-c:v','ffv1','-level','3','-g','1','-fps_mode','passthrough',$OutputPath)) {
         $args.Add([string]$item)
     }

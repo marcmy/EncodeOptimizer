@@ -155,6 +155,42 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
         if ($null -ne $aggregate.MeanSsim) { $aggregate.MeanSsim | Should -BeGreaterThan 0.98 }
     }
 
+    It 'normalizes a non-zero 29.97 fps sample timestamp before analysis comparison' {
+        $source = Join-Path $script:root 'offset-2997-source.mp4'
+        $reference = Join-Path $script:root 'offset-2997-reference.mkv'
+        $candidate = Join-Path $script:root 'offset-2997-candidate.mkv'
+        $fixtureArgs = @(
+            '-hide_banner','-loglevel','error',
+            '-f','lavfi','-i','testsrc2=size=320x180:rate=30000/1001:duration=12',
+            '-vf','setpts=PTS+0.5/TB',
+            '-c:v','libx264','-preset','veryfast','-crf','8','-pix_fmt','yuv420p',
+            $source
+        )
+        & $script:ffmpeg @fixtureArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate non-zero timestamp integration fixture.' }
+
+        $probe = Get-EOSourceProbe -Path $source -FFprobePath $script:ffprobe
+        $profile = Resolve-EOEncoderProfile -Name 'libx264' -Capabilities $script:capabilities -SourceProbe $probe
+        $analysisContainer = Get-EOAnalysisContainerPlan
+        $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
+        $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $source -OutputPath $reference -Start 2.137 -Duration 3.0)
+        ($referenceArgs -join '|') | Should -Match '\|-vf\|setpts=PTS-STARTPTS\|'
+        & $script:ffmpeg @referenceArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate normalized timestamp reference sample.' }
+
+        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $reference -OutputPath $candidate -SourceProbe $probe -EncoderProfile $profile -ContainerPlan $analysisContainer -StreamPlan $videoOnly -Quality 10 -Analysis)
+        & $script:ffmpeg @candidateArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to encode normalized timestamp analysis candidate.' }
+
+        $plan = Get-EOMetricPlan -SourceProbe $probe -Capabilities $script:capabilities
+        $metrics = Invoke-EOMetrics -ReferencePath $reference -CandidatePath $candidate -MetricPlan $plan -ReferenceStart 0 -Duration 3.0 -SampleName 'offset-2997' -FFmpegPath $script:ffmpeg -WorkDirectory (Join-Path $script:root 'offset-2997-metrics')
+        $aggregate = Measure-EOMetricAggregate -Samples @($metrics) -VmafRole $plan.VmafRole
+
+        if ($null -ne $aggregate.MeanVmaf) { $aggregate.MeanVmaf | Should -BeGreaterThan 98.0 }
+        if ($null -ne $aggregate.P05Vmaf) { $aggregate.P05Vmaf | Should -BeGreaterThan 95.0 }
+        if ($null -ne $aggregate.MeanSsim) { $aggregate.MeanSsim | Should -BeGreaterThan 0.98 }
+    }
+
     It 'uses the primary video timeline when Matroska audio outlasts video' {
         $source = Join-Path $script:root 'audio-longer-than-video.mkv'
         $reference = Join-Path $script:root 'audio-longer-tail-reference.mkv'
