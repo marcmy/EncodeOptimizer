@@ -46,10 +46,15 @@ function Get-EOSourceFingerprint {
             foreach ($position in $positions) {
                 $stream.Position = [long]$position
                 $buffer = [byte[]]::new([int][math]::Min([long]$chunk, $size - [long]$position))
-                $read = $stream.Read($buffer, 0, $buffer.Length)
+                $offset = 0
+                while ($offset -lt $buffer.Length) {
+                    $read = $stream.Read($buffer, $offset, $buffer.Length - $offset)
+                    if ($read -le 0) { throw "Source '$($item.FullName)' changed while it was being fingerprinted." }
+                    $offset += $read
+                }
                 $positionBytes = [BitConverter]::GetBytes([long]$position)
                 $memory.Write($positionBytes, 0, $positionBytes.Length)
-                $memory.Write($buffer, 0, $read)
+                $memory.Write($buffer, 0, $buffer.Length)
             }
             $hash = Get-EOHashHex $memory.ToArray()
             return [pscustomobject]@{ Hash=$hash; Size=$size; Sampled=$true; Algorithm='SHA256-sampled-v1' }

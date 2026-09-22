@@ -319,29 +319,57 @@ function Read-EOVmafJson {
     return @($result)
 }
 
+function ConvertFrom-EOStatsValue {
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    if ($Text -match '^(?:\+?inf|infinity)$') { return 100.0 }
+    if ($Text -match '^-inf$') { return 0.0 }
+    if ($Text -match '^nan$') { return $null }
+
+    $parsed = 0.0
+    if ([double]::TryParse($Text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+        return $parsed
+    }
+    return $null
+}
+
 function Read-EOStatsFile {
     param([string]$Path, [ValidateSet('xpsnr','ssim','psnr')] [string]$Metric)
     if (-not (Test-Path -LiteralPath $Path)) { return @{} }
     $map = @{}
     $index = 0
+    $numberPattern = '(?:[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?|inf|infinity))'
     foreach ($line in Get-Content -LiteralPath $Path) {
-        $value = $null
+        $valueText = $null
         switch ($Metric) {
             'ssim' {
-                if ($line -match 'All:([0-9.+-Ee]+)') { $value = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) }
+                if ($line -match "^\s*n:\s*\d+\b.*\bAll:\s*(?<value>$numberPattern)") { $valueText = $Matches['value'] }
             }
             'psnr' {
-                if ($line -match 'psnr_avg:([0-9.+-Ee]+|inf)') {
-                    $value = if ($Matches[1] -eq 'inf') { 100.0 } else { [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) }
-                }
+                if ($line -match "^\s*n:\s*\d+\b.*\bpsnr_avg:\s*(?<value>$numberPattern)") { $valueText = $Matches['value'] }
             }
             'xpsnr' {
-                if ($line -match 'XPSNR[^:]*:([0-9.+-Ee]+)') { $value = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) }
-                elseif ($line -match 'xpsnr_avg:([0-9.+-Ee]+)') { $value = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) }
+                # FFmpeg writes one numbered record per frame followed by a
+                # human-readable average line. XPSNR policy uses the luma (Y)
+                # value, so only numbered Y records are accepted here.
+                if ($line -match "^\s*n:\s*\d+\s+XPSNR\s+y:\s*(?<value>$numberPattern)(?:\s|$)") {
+                    $valueText = $Matches['value']
+                } elseif ($line -match "^\s*xpsnr_avg:\s*(?<value>$numberPattern)\s*$") {
+                    # Keep compatibility with older/custom stats emitters that
+                    # provide one explicit average value per line.
+                    $valueText = $Matches['value']
+                }
             }
         }
-        if ($null -ne $value) { $map[$index] = [double]$value }
-        $index++
+
+        if ($null -ne $valueText) {
+            $value = ConvertFrom-EOStatsValue $valueText
+            if ($null -ne $value) {
+                $map[$index] = [double]$value
+                $index++
+            }
+        }
     }
     return $map
 }

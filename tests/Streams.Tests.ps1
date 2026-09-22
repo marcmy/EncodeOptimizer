@@ -68,6 +68,15 @@ Describe 'container and stream preservation' {
         $plan.Warnings -join ' ' | Should -Match 'subtitle'
     }
 
+    It 'rejects explicitly requested MP4 when data streams are present' {
+        $probe = New-StreamProbe
+        $probe.Data = @([pscustomobject]@{ Index = 3; CodecName = 'tmcd' })
+        $encoder = [pscustomobject]@{ Name = 'hevc_nvenc'; Codec = 'hevc'; Hardware = $true }
+
+        { Get-EOContainerPlan -SourceProbe $probe -EncoderProfile $encoder -Container 'mp4' } |
+            Should -Throw '*data streams*'
+    }
+
     It 'maps auxiliary streams for lossless copy' {
         $probe = New-StreamProbe -FormatName 'matroska,webm' -SubtitleCodec 'subrip'
         $probe.Attachments = @([pscustomobject]@{ Index = 3; CodecName = 'ttf' })
@@ -103,6 +112,7 @@ Describe 'container and stream preservation' {
         $joined | Should -Match '-pix_fmt p010le'
         $joined | Should -Match '-tag:v hvc1'
         $joined | Should -Match '-color_trc smpte2084'
+        $joined | Should -Match '-nostdin -i'
         $joined | Should -Not -Match '(^|\s)-r(\s|$)'
     }
 

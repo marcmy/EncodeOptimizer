@@ -91,7 +91,7 @@ The profiles are policy thresholds, not universal claims that a particular score
 
 `Conservative` is the default. It also requires HIGH confidence for unattended batch AutoEncode. Balanced and Aggressive batch AutoEncode require MEDIUM confidence.
 
-For sources where VMAF is not authoritative, the configured secondary-metric thresholds are used instead. Conservative currently requires at least two available secondary metrics, with XPSNR >= 45 dB, SSIM >= 0.990, and PSNR >= 45 dB where those metrics are available.
+For sources where VMAF is not authoritative, the configured secondary-metric thresholds are used instead. Conservative currently requires at least two available secondary metrics, with luma-plane XPSNR >= 45 dB, SSIM >= 0.990, and PSNR >= 45 dB where those metrics are available.
 
 ## Encoder policy
 
@@ -224,9 +224,10 @@ The Windows GitHub Actions workflow runs unit and real FFmpeg integration jobs s
 - a real crop encode with copied audio and source-safety checks;
 - source-relative metric execution through the installed FFmpeg filters;
 - the public single-file analyze/report path;
+- safe KEEP_SOURCE handling when a candidate sample encode fails;
 - recursive batch filtering, per-file output reports, and a real second-run exact resume.
 
-At the current branch revision the suite contains **82 passing unit tests and 6 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
+At the current branch revision the suite contains **85 passing unit tests and 7 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
 
 ## Design documents
 

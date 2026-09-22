@@ -43,6 +43,22 @@ Describe 'source-relative metric planning' {
         }
     }
 
+    It 'parses numbered FFmpeg XPSNR records without treating the summary as a frame' {
+        $statsPath = Join-Path $TestDrive 'xpsnr.log'
+        @(
+            'n:    1  XPSNR y: 10.2977  XPSNR u: 13.1923  XPSNR v: 12.5126'
+            ''
+            'n:    2  XPSNR y: inf  XPSNR u: inf  XPSNR v: inf'
+            'XPSNR average, 2 frames  y: 55.1488  u: 60.0000  v: 60.0000  (minimum: 10.2977)'
+        ) | Set-Content -LiteralPath $statsPath
+
+        $parsed = InModuleScope Metrics { Read-EOStatsFile -Path $using:statsPath -Metric 'xpsnr' }
+
+        $parsed.Count | Should -Be 2
+        $parsed[0] | Should -Be 10.2977
+        $parsed[1] | Should -Be 100.0
+    }
+
     It 'applies the requested user transform to both reference and encode paths exactly once' {
         $source = [pscustomobject]@{ Video = [pscustomobject]@{ IsHdr = $false; BitDepth = 8; PixelFormat = 'yuv420p'; Width = 1280; Height = 720; IsVfr = $false } }
         $caps = [pscustomobject]@{ Filters = @('libvmaf','xpsnr','ssim','psnr') }

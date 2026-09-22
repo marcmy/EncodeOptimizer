@@ -248,6 +248,35 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
         }
     }
 
+    It 'keeps a source safely when a candidate sample encode fails' {
+        $oldLocalAppData = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = Join-Path $script:root 'failure-localappdata'
+        $wrapper = Join-Path $script:root 'ffmpeg-fail-candidate.cmd'
+        $escapedFfmpeg = ([string]$script:ffmpeg).Replace('"', '""')
+        @"
+@echo off
+echo %* | findstr /i "candidate" >nul
+if not errorlevel 1 (
+    echo intentional candidate sample failure 1>&2
+    exit /b 17
+)
+"$escapedFfmpeg" %*
+exit /b %ERRORLEVEL%
+"@ | Set-Content -LiteralPath $wrapper -Encoding ascii
+
+        try {
+            $optimizer = Join-Path $repoRoot 'Optimize-Video.ps1'
+            $report = & $optimizer -Path $script:source -Profile Aggressive -Encoder libx264 -FFmpegPath $wrapper -FFprobePath $script:ffprobe
+
+            $report.Decision | Should -Be 'KEEP_SOURCE'
+            @($report.Candidates).Count | Should -BeGreaterThan 0
+            ($report.Warnings -join ' ') | Should -Match 'Candidate sample encode failed'
+            @($report.Candidates | ForEach-Object { $_.Failures } | Where-Object { $_ -match 'Candidate sample encode failed' }).Count | Should -BeGreaterThan 0
+        } finally {
+            $env:LOCALAPPDATA = $oldLocalAppData
+        }
+    }
+
     It 'runs recursive batch analysis with filtering, per-file output reports, and exact resume' {
         $oldLocalAppData = $env:LOCALAPPDATA
         $env:LOCALAPPDATA = Join-Path $script:root 'batch-localappdata'

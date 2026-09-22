@@ -44,8 +44,8 @@ function Get-EOContainerPlan {
         $chosen = 'mkv'
     }
 
-    if ($chosen -eq 'mp4' -and ($unsafeMp4Subtitles.Count -gt 0 -or $hasAttachments)) {
-        throw 'MP4 was explicitly requested but one or more source streams cannot be copied safely. Choose Matroska or explicitly transform/remove those streams.'
+    if ($chosen -eq 'mp4' -and ($unsafeMp4Subtitles.Count -gt 0 -or $hasAttachments -or $hasData)) {
+        throw 'MP4 was explicitly requested but one or more source streams cannot be copied safely, including subtitles, attachments, or data streams. Choose Matroska or explicitly transform/remove those streams.'
     }
 
     [pscustomobject]@{
@@ -90,7 +90,7 @@ function Get-EOStreamPlan {
         if ($ContainerPlan.Container -eq 'mkv') {
             $args.Add('-map'); $args.Add('0:d?'); $args.Add('-c:d'); $args.Add('copy')
         } else {
-            $warnings.Add('Data streams require explicit compatibility validation before MP4 output.')
+            throw 'Data streams cannot be preserved safely in the selected output container. Choose Matroska or explicitly transform/remove them.'
         }
     }
 
@@ -205,7 +205,7 @@ function New-EOFinalEncodeArguments {
     if ([IO.Path]::GetFullPath($InputPath) -eq [IO.Path]::GetFullPath($OutputPath)) { throw 'Output path must not overwrite the input file.' }
 
     $args = [System.Collections.Generic.List[string]]::new()
-    $args.Add('-hide_banner'); $args.Add('-i'); $args.Add($InputPath)
+    $args.Add('-hide_banner'); $args.Add('-nostdin'); $args.Add('-i'); $args.Add($InputPath)
     foreach ($arg in @($StreamPlan.Arguments)) { $args.Add([string]$arg) }
     if ($VideoFilter) { $args.Add('-vf'); $args.Add($VideoFilter) }
 

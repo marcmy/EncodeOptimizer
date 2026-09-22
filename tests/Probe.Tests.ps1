@@ -46,6 +46,45 @@ Describe 'ffprobe normalization' {
         $probe.Chapters.Count | Should -Be 1
     }
 
+    It 'does not infer HDR10 from an empty content-light metadata block' {
+        $json = @'
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "hevc",
+      "profile": "Main 10",
+      "width": 1920,
+      "height": 1080,
+      "pix_fmt": "yuv420p10le",
+      "r_frame_rate": "30000/1001",
+      "avg_frame_rate": "30000/1001",
+      "time_base": "1/1000",
+      "color_primaries": "bt2020",
+      "color_transfer": "smpte2084",
+      "color_space": "bt2020nc",
+      "side_data_list": [
+        { "side_data_type": "Content light level metadata" }
+      ]
+    }
+  ],
+  "format": {
+    "format_name": "matroska,webm",
+    "duration": "10",
+    "size": "1000000"
+  }
+}
+'@
+
+        $probe = ConvertFrom-EOFFprobeJson -Json $json -Path 'empty-cll.mkv'
+
+        $probe.Video.IsHdr | Should -BeTrue
+        $probe.Video.HdrKind | Should -Be 'PQ'
+        $probe.Video.MaxCLL | Should -BeNullOrEmpty
+        $probe.Video.MaxFALL | Should -BeNullOrEmpty
+    }
+
     It 'uses a Matroska stream DURATION tag when stream duration is unavailable' {
         $json = @'
 {

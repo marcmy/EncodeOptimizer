@@ -379,6 +379,7 @@ $evaluator = {
     param($Quality,$Samples,$Phase)
     $metricSamples = [System.Collections.Generic.List[object]]::new()
     $sizeSamples = [System.Collections.Generic.List[object]]::new()
+    $evaluationFailures = [System.Collections.Generic.List[string]]::new()
     $sampleIndex = 0
     $phaseLabel = if ($Phase -eq 'Verification') { 'VERIFY' } else { 'SEARCH' }
     $sampleCount = @($Samples).Count
@@ -391,7 +392,15 @@ $evaluator = {
         $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
         $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $analysisContainerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -Analysis)
         Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality sample $sampleIndex/$sampleCount") -Detail ("candidate encode + metrics | start $([math]::Round([double]$sample.Start,3))s | duration $([math]::Round([double]$sample.Duration,3))s") -Live
-        Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $candidateArgs -Description "candidate sample encode q$Quality" | Out-Null
+        try {
+            Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $candidateArgs -Description "candidate sample encode q$Quality" | Out-Null
+        } catch {
+            $failure = "Candidate sample encode failed for $phaseLabel quality $Quality sample $sampleIndex/${sampleCount}: $($_.Exception.Message)"
+            $evaluationFailures.Add($failure)
+            Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality sample $sampleIndex/$sampleCount failed") -Detail $failure -Advance 1 -Live
+            if (-not $KeepSamples) { Remove-Item -LiteralPath $sampleDirectory -Recurse -Force -ErrorAction SilentlyContinue }
+            continue
+        }
 
         $metricDirectory = Join-Path $sampleDirectory 'metrics'
         $metric = Invoke-EOMetrics -ReferencePath $referencePath -CandidatePath $candidatePath -MetricPlan $sampleMetricPlan -ReferenceStart 0 -Duration ([double]$sample.Duration) -SampleName ("$Phase-$sampleIndex") -FFmpegPath $resolvedFFmpeg -WorkDirectory $metricDirectory
@@ -411,19 +420,35 @@ $evaluator = {
 
     $aggregateParameters = @{ Samples=@($metricSamples); VmafRole=$sampleMetricPlan.VmafRole }
     $baselineSamples = @($vmafBaselines[$Phase])
-    if ($baselineSamples.Count) { $aggregateParameters.VmafBaselineSamples = $baselineSamples }
-    $aggregate = Measure-EOMetricAggregate @aggregateParameters
+    if ($baselineSamples.Count -and $evaluationFailures.Count -eq 0) { $aggregateParameters.VmafBaselineSamples = $baselineSamples }
+    $aggregate = if ($metricSamples.Count) {
+        Measure-EOMetricAggregate @aggregateParameters
+    } else {
+        [pscustomobject]@{
+            VmafRole=$sampleMetricPlan.VmafRole; VmafBaselineApplied=$false; FrameCount=0; RelativeFrameCount=0; SampleCount=0
+            MeanVmaf=$null; RelativeMeanVmaf=$null; MinimumVmaf=$null; P01Vmaf=$null; P05Vmaf=$null; RelativeP05Vmaf=$null; P10Vmaf=$null
+            WorstSampleVmaf=$null; WorstSampleName=$null; RelativeWorstSampleVmaf=$null; RelativeWorstSampleName=$null
+            MeanXpsnr=$null; MeanSsim=$null; MeanPsnr=$null; Samples=@()
+        }
+    }
     $policyDecision = Test-EOQualityPolicy -Aggregate $aggregate -Policy $policy
-    $sizeEstimate = Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $containerDuration -PopulationComplexities $populationComplexities -AuxiliaryBitrateKbps $auxiliaryKbps
-    $qualityStatus = if ($policyDecision.Passed) { 'PASS' } else { 'FAIL' }
-    $estimatedText = if ($null -ne $sizeEstimate.EstimatedBytes) { "estimated $([math]::Round([double]$sizeEstimate.EstimatedBytes / 1GB,2)) GB" } else { 'estimated size unavailable' }
-    Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality result") -Detail ("$qualityStatus | $(Get-EOProgressMetricSummary $aggregate) | margin $([math]::Round([double]$policyDecision.MinimumMargin,2)) | $estimatedText")
+    $sizeEstimate = if ($evaluationFailures.Count -eq 0) {
+        Estimate-EOOutputSize -SampleResults @($sizeSamples) -DurationSeconds $containerDuration -PopulationComplexities $populationComplexities -AuxiliaryBitrateKbps $auxiliaryKbps
+    } else {
+        $null
+    }
+    $qualityStatus = if ($policyDecision.Passed -and $evaluationFailures.Count -eq 0) { 'PASS' } else { 'FAIL' }
+    $estimatedText = if ($null -ne $sizeEstimate -and $null -ne $sizeEstimate.EstimatedBytes) { "estimated $([math]::Round([double]$sizeEstimate.EstimatedBytes / 1GB,2)) GB" } else { 'estimated size unavailable' }
+    $marginText = if ($null -ne $policyDecision.MinimumMargin) { "margin $([math]::Round([double]$policyDecision.MinimumMargin,2))" } else { 'margin unavailable' }
+    $failureText = if ($evaluationFailures.Count) { " | failures $($evaluationFailures.Count)" } else { '' }
+    Write-EOProgress -Phase $phaseLabel -Action ("$($encoderProfile.QualityControl)=$Quality result") -Detail ("$qualityStatus | $(Get-EOProgressMetricSummary $aggregate) | $marginText | $estimatedText$failureText")
+    $allFailures = @($policyDecision.Failures) + @($evaluationFailures | ForEach-Object { [string]$_ })
     return [pscustomobject]@{
-        Quality=$Quality; Phase=$Phase; Passed=$policyDecision.Passed; MinimumMargin=$policyDecision.MinimumMargin; AuthoritativeMetric=$policyDecision.AuthoritativeMetric
+        Quality=$Quality; Phase=$Phase; Passed=($policyDecision.Passed -and $evaluationFailures.Count -eq 0); MinimumMargin=$policyDecision.MinimumMargin; AuthoritativeMetric=$policyDecision.AuthoritativeMetric
         MeanVmaf=$aggregate.MeanVmaf; WorstSampleVmaf=$aggregate.WorstSampleVmaf; P05Vmaf=$aggregate.P05Vmaf
         RelativeMeanVmaf=$aggregate.RelativeMeanVmaf; RelativeWorstSampleVmaf=$aggregate.RelativeWorstSampleVmaf; RelativeP05Vmaf=$aggregate.RelativeP05Vmaf
         MeanXpsnr=$aggregate.MeanXpsnr; MeanSsim=$aggregate.MeanSsim; MeanPsnr=$aggregate.MeanPsnr
-        EstimatedBytes=$sizeEstimate.EstimatedBytes; SizeEstimate=$sizeEstimate; SampleResults=@($metricSamples); Aggregate=$aggregate; Failures=@($policyDecision.Failures)
+        EstimatedBytes=if ($null -ne $sizeEstimate) { $sizeEstimate.EstimatedBytes } else { $null }; SizeEstimate=$sizeEstimate; SampleResults=@($metricSamples); AttemptedSampleCount=($metricSamples.Count + $evaluationFailures.Count); Aggregate=$aggregate; Failures=$allFailures
     }
 }
 
@@ -434,10 +459,27 @@ $searchParameters = @{
 }
 if ($null -ne $historySeed) { $searchParameters.SeedQuality = [int]$historySeed }
 $searchResult = Find-EOOptimalQuality @searchParameters
+$reportedEvaluationFailures = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($evaluation in @($searchResult.AllEvaluations)) {
+    $failureProperty = $evaluation.PSObject.Properties['Failures']
+    if ($null -eq $failureProperty) { continue }
+    foreach ($failure in @($failureProperty.Value)) {
+        if ([string]$failure -notlike 'Candidate sample encode failed*') { continue }
+        if (-not [string]::IsNullOrWhiteSpace([string]$failure) -and $reportedEvaluationFailures.Add([string]$failure)) {
+            $warnings.Add([string]$failure)
+        }
+    }
+}
 $actualSearchWorkUnits = 0
-foreach ($evaluation in @($searchResult.SearchEvaluations)) { $actualSearchWorkUnits += @($evaluation.SampleResults).Count }
+foreach ($evaluation in @($searchResult.SearchEvaluations)) {
+    $attemptedProperty = $evaluation.PSObject.Properties['AttemptedSampleCount']
+    $actualSearchWorkUnits += if ($attemptedProperty) { [int]$attemptedProperty.Value } else { @($evaluation.SampleResults).Count }
+}
 $actualVerificationWorkUnits = 0
-foreach ($evaluation in @($searchResult.VerificationEvaluations)) { $actualVerificationWorkUnits += @($evaluation.SampleResults).Count }
+foreach ($evaluation in @($searchResult.VerificationEvaluations)) {
+    $attemptedProperty = $evaluation.PSObject.Properties['AttemptedSampleCount']
+    $actualVerificationWorkUnits += if ($attemptedProperty) { [int]$attemptedProperty.Value } else { @($evaluation.SampleResults).Count }
+}
 $progressState.TotalUnits = [math]::Max(1, $analysisWindows.Count + $actualSearchSampleCount + $actualVerificationSampleCount + $actualBaselineSampleCount + $actualSearchWorkUnits + $actualVerificationWorkUnits + 1)
 Write-EOProgress -Phase 'SEARCH' -Action 'quality search complete' -Detail ("search tests $(@($searchResult.SearchEvaluations).Count) | verification tests $(@($searchResult.VerificationEvaluations).Count) | decision $($searchResult.Decision)")
 if (-not $KeepSamples) { Remove-Item -LiteralPath $referenceRoot -Recurse -Force -ErrorAction SilentlyContinue }

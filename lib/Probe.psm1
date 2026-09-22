@@ -134,8 +134,12 @@ function Get-EOHdrMetadata {
         $type = [string](Get-EOPropertyValue $side 'side_data_type' '')
         if ($type -match 'Mastering display') { $mastering = $side }
         if ($type -match 'Content light level') {
-            $maxCll = [int](ConvertTo-EODouble (Get-EOPropertyValue $side 'max_content' 0))
-            $maxFall = [int](ConvertTo-EODouble (Get-EOPropertyValue $side 'max_average' 0))
+            $maxContent = Get-EOPropertyValue $side 'max_content'
+            $maxAverage = Get-EOPropertyValue $side 'max_average'
+            $parsedContent = ConvertTo-EODouble $maxContent ([double]::NaN)
+            $parsedAverage = ConvertTo-EODouble $maxAverage ([double]::NaN)
+            if (-not [double]::IsNaN($parsedContent)) { $maxCll = [int]$parsedContent }
+            if (-not [double]::IsNaN($parsedAverage)) { $maxFall = [int]$parsedAverage }
         }
         if ($type -match 'DOVI|Dolby Vision') { $dolbyVision = $true }
     }

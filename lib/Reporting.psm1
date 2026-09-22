@@ -63,7 +63,7 @@ function New-EOReport {
             Phase=Get-EOReportProperty $_ 'Phase'; Quality=Get-EOReportProperty $_ 'Quality'; Passed=[bool](Get-EOReportProperty $_ 'Passed' $false)
             MeanVmaf=Get-EOReportProperty $_ 'MeanVmaf'; WorstSampleVmaf=Get-EOReportProperty $_ 'WorstSampleVmaf'; P05Vmaf=Get-EOReportProperty $_ 'P05Vmaf'
             RelativeMeanVmaf=Get-EOReportProperty $_ 'RelativeMeanVmaf'; RelativeWorstSampleVmaf=Get-EOReportProperty $_ 'RelativeWorstSampleVmaf'; RelativeP05Vmaf=Get-EOReportProperty $_ 'RelativeP05Vmaf'
-            MinimumMargin=Get-EOReportProperty $_ 'MinimumMargin'; EstimatedBytes=Get-EOReportProperty $_ 'EstimatedBytes'; Samples=$sampleRows
+            MinimumMargin=Get-EOReportProperty $_ 'MinimumMargin'; EstimatedBytes=Get-EOReportProperty $_ 'EstimatedBytes'; Samples=$sampleRows; Failures=@(Get-EOReportProperty $_ 'Failures' @())
         }
     })
 
