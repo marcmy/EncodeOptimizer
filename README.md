@@ -227,7 +227,7 @@ The Windows GitHub Actions workflow runs unit and real FFmpeg integration jobs s
 - safe KEEP_SOURCE handling when a candidate sample encode fails;
 - recursive batch filtering, per-file output reports, and a real second-run exact resume.
 
-At the current branch revision the suite contains **85 passing unit tests and 7 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
+At the current branch revision the suite contains **99 passing unit tests and 10 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
 
 ## Design documents
 
