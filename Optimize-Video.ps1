@@ -181,6 +181,7 @@ $encoderRationale = @("Selected the first safe Auto-but-conservative candidate '
 if ($encoderProfile.Hardware) { $encoderRationale += 'Hardware encoder selected to avoid unnecessary CPU saturation.' }
 
 $containerPlan = Get-EOContainerPlan -SourceProbe $sourceProbe -EncoderProfile $encoderProfile
+$analysisContainerPlan = Get-EOAnalysisContainerPlan
 $streamPlan = Get-EOStreamPlan -SourceProbe $sourceProbe -ContainerPlan $containerPlan
 foreach ($warning in @($containerPlan.Warnings) + @($streamPlan.Warnings)) { $warnings.Add([string]$warning) }
 $metricPlan = Get-EOMetricPlan -SourceProbe $sourceProbe -Capabilities $capabilities -VideoFilter $VideoFilter
@@ -205,7 +206,7 @@ $sourceBytes = [long]$sourceProbe.Format.Size
 if ($sourceBytes -le 0) { $sourceBytes = [long]$inputItem.Length }
 
 $fingerprint = Get-EOSourceFingerprint -Path $inputPath
-$pipelineVersion = 'deterministic-reference-v8-relative-vmaf'
+$pipelineVersion = 'deterministic-reference-v9-analysis-matroska'
 $encoderSignature = (@($encoderProfile.Arguments) + @($encoderProfile.AnalysisArguments) + @($encoderProfile.QualityControl,$encoderProfile.SearchMinimum,$encoderProfile.SearchMaximum)) -join '|'
 $policySignature = @($policy.MeanVmaf,$policy.WorstSampleVmaf,$policy.P05Vmaf,$policy.MinimumXpsnr,$policy.MinimumSsim,$policy.MinimumPsnr,$policy.MinimumSavingsRatio) -join '|'
 $cacheRoot = Get-EODefaultCacheRoot
@@ -290,10 +291,10 @@ $evaluator = {
         $sampleIndex++
         $sampleDirectory = Join-Path $workRoot ("$Phase-q$Quality-s$sampleIndex-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $sampleDirectory -Force | Out-Null
-        $candidatePath = Join-Path $sampleDirectory ('candidate' + $containerPlan.Extension)
+        $candidatePath = Join-Path $sampleDirectory ('candidate' + $analysisContainerPlan.Extension)
         $referencePath = $referencePaths[$Phase][$sampleIndex - 1]
         $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
-        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $containerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -Analysis)
+        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $referencePath -OutputPath $candidatePath -SourceProbe $sourceProbe -EncoderProfile $encoderProfile -ContainerPlan $analysisContainerPlan -StreamPlan $videoOnly -Quality ([int]$Quality) -Analysis)
         Invoke-EOExternalCommand -Executable $resolvedFFmpeg -Arguments $candidateArgs -Description "candidate sample encode q$Quality" | Out-Null
 
         $metricDirectory = Join-Path $sampleDirectory 'metrics'

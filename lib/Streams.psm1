@@ -56,6 +56,18 @@ function Get-EOContainerPlan {
     }
 }
 
+function Get-EOAnalysisContainerPlan {
+    [CmdletBinding()]
+    param()
+
+    [pscustomobject]@{
+        Container = 'mkv'
+        Extension = '.mkv'
+        VideoTag  = $null
+        Warnings  = @()
+    }
+}
+
 function Get-EOStreamPlan {
     [CmdletBinding()]
     param([Parameter(Mandatory)] $SourceProbe, [Parameter(Mandatory)] $ContainerPlan)
@@ -266,4 +278,4 @@ function Add-EOSampleWindowArguments {
     return $result.ToArray()
 }
 
-Export-ModuleMember -Function Get-EOContainerPlan, Get-EOStreamPlan, New-EOFinalEncodeArguments, New-EOReferenceSampleArguments, Add-EOSampleWindowArguments
+Export-ModuleMember -Function Get-EOContainerPlan, Get-EOAnalysisContainerPlan, Get-EOStreamPlan, New-EOFinalEncodeArguments, New-EOReferenceSampleArguments, Add-EOSampleWindowArguments

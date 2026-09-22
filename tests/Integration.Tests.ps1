@@ -121,6 +121,40 @@ Describe 'real FFmpeg integration' -Tag 'Integration' {
         if ($null -ne $aggregate.MeanSsim) { $aggregate.MeanSsim | Should -BeGreaterThan 0.98 }
     }
 
+    It 'keeps a fractional 23.976 fps analysis candidate aligned by using Matroska' {
+        $source = Join-Path $script:root 'fractional-23976-source.mp4'
+        $reference = Join-Path $script:root 'fractional-23976-reference.mkv'
+        $candidate = Join-Path $script:root 'fractional-23976-candidate.mkv'
+        $fixtureArgs = @(
+            '-hide_banner','-loglevel','error',
+            '-f','lavfi','-i','testsrc2=size=320x180:rate=24000/1001:duration=8',
+            '-c:v','libx264','-preset','veryfast','-crf','8','-pix_fmt','yuv420p',
+            $source
+        )
+        & $script:ffmpeg @fixtureArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate 23.976 fps integration fixture.' }
+
+        $probe = Get-EOSourceProbe -Path $source -FFprobePath $script:ffprobe
+        $profile = Resolve-EOEncoderProfile -Name 'libx264' -Capabilities $script:capabilities -SourceProbe $probe
+        $analysisContainer = Get-EOAnalysisContainerPlan
+        $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
+        $referenceArgs = @(New-EOReferenceSampleArguments -InputPath $source -OutputPath $reference -Start 2.137 -Duration 3.0)
+        & $script:ffmpeg @referenceArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to generate 23.976 fps lossless reference sample.' }
+
+        $candidateArgs = @(New-EOFinalEncodeArguments -InputPath $reference -OutputPath $candidate -SourceProbe $probe -EncoderProfile $profile -ContainerPlan $analysisContainer -StreamPlan $videoOnly -Quality 10 -Analysis)
+        & $script:ffmpeg @candidateArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to encode 23.976 fps Matroska analysis candidate.' }
+
+        $plan = Get-EOMetricPlan -SourceProbe $probe -Capabilities $script:capabilities
+        $metrics = Invoke-EOMetrics -ReferencePath $reference -CandidatePath $candidate -MetricPlan $plan -ReferenceStart 0 -Duration 3.0 -SampleName 'fractional-23976-mkv' -FFmpegPath $script:ffmpeg -WorkDirectory (Join-Path $script:root 'fractional-23976-metrics')
+        $aggregate = Measure-EOMetricAggregate -Samples @($metrics) -VmafRole $plan.VmafRole
+
+        if ($null -ne $aggregate.MeanVmaf) { $aggregate.MeanVmaf | Should -BeGreaterThan 98.0 }
+        if ($null -ne $aggregate.P05Vmaf) { $aggregate.P05Vmaf | Should -BeGreaterThan 95.0 }
+        if ($null -ne $aggregate.MeanSsim) { $aggregate.MeanSsim | Should -BeGreaterThan 0.98 }
+    }
+
     It 'uses the primary video timeline when Matroska audio outlasts video' {
         $source = Join-Path $script:root 'audio-longer-than-video.mkv'
         $reference = Join-Path $script:root 'audio-longer-tail-reference.mkv'

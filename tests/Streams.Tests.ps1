@@ -39,6 +39,27 @@ Describe 'container and stream preservation' {
         $plan.VideoTag | Should -Be 'hvc1'
     }
 
+    It 'uses Matroska for temporary analysis candidates even when final output is MP4' {
+        Get-Command Get-EOAnalysisContainerPlan -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        $probe = New-StreamProbe
+        $encoder = [pscustomobject]@{
+            Name='hevc_nvenc'; Codec='hevc'; Hardware=$true; QualityOption='-cq'
+            PixelFormats=@('yuv420p'); Arguments=@('-preset','p7'); AnalysisArguments=@('-preset','p7')
+        }
+        $finalPlan = Get-EOContainerPlan -SourceProbe $probe -EncoderProfile $encoder
+        $analysisPlan = Get-EOAnalysisContainerPlan
+        $videoOnly = [pscustomobject]@{ Arguments=@('-map','0:v:0'); Warnings=@() }
+
+        $finalPlan.Container | Should -Be 'mp4'
+        $analysisPlan.Container | Should -Be 'mkv'
+        $analysisPlan.Extension | Should -Be '.mkv'
+        $analysisPlan.VideoTag | Should -BeNullOrEmpty
+
+        $args = @(New-EOFinalEncodeArguments -InputPath 'reference.mkv' -OutputPath ('candidate' + $analysisPlan.Extension) -SourceProbe $probe -EncoderProfile $encoder -ContainerPlan $analysisPlan -StreamPlan $videoOnly -Quality 18 -Analysis)
+        $args[-1] | Should -Be 'candidate.mkv'
+        ($args -join '|') | Should -Not -Match '\|-tag:v\|hvc1(?:\||$)'
+    }
+
     It 'falls back to Matroska rather than dropping an incompatible subtitle' {
         $probe = New-StreamProbe -SubtitleCodec 'subrip'
         $encoder = [pscustomobject]@{ Name = 'hevc_nvenc'; Codec = 'hevc'; Hardware = $true }
