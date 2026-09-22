@@ -503,7 +503,7 @@ if ($sourceProbe.Video.DolbyVision) { $edgeFlags.Add('DolbyVision') }
 if ($sourceProbe.Video.IsVfr) { $edgeFlags.Add('VFR') }
 if ($sourceProbe.Video.IsInterlaced) { $edgeFlags.Add('Interlace') }
 if (-not $capabilities.HasVmaf) { $edgeFlags.Add('MissingVmaf') }
-$confidence = Get-EOConfidence -Coverage $coverageScore -Diversity $diversityScore -MinimumMargin $minimumMargin -MetricAgreement $metricAgreement -VerificationPassed:([bool]$searchResult.VerificationPassed) -SearchStable:([bool]$searchResult.SearchStable) -EdgeCaseFlags @($edgeFlags) -MetricConfidencePenalty ([double]$metricPlan.ConfidencePenalty)
+$confidence = Get-EOConfidence -Coverage $coverageScore -Diversity $diversityScore -MinimumMargin $minimumMargin -MetricAgreement $metricAgreement -VerificationPassed:([bool]$searchResult.VerificationPassed) -SearchStable:([bool]$searchResult.SearchStable) -EdgeCaseFlags @($edgeFlags) -MetricConfidencePenalty ([double]$metricPlan.ConfidencePenalty) -SizeEstimateDisagreementRatio $sizeEstimateDisagreementRatio
 $confidence = Set-EOConfidenceCeiling -Confidence $confidence -Ceiling ([string]$safetyGate.ConfidenceCeiling)
 
 $finalOutputPath = $null

@@ -87,6 +87,7 @@ function New-EOReport {
         EstimatedSavings=[pscustomobject]@{
             Ratio=$savings; EstimatedBytes=$estimatedBytes; LowerBytes=Get-EOReportProperty $SizeEstimate 'LowerBytes'; UpperBytes=Get-EOReportProperty $SizeEstimate 'UpperBytes'; VideoKbps=Get-EOReportProperty $SizeEstimate 'VideoKbps'
             Source=Get-EOReportProperty $SearchResult 'SizeEstimateSource'; DisagreementRatio=Get-EOReportProperty $SearchResult 'SizeEstimateDisagreementRatio'
+            SearchBytes=Get-EOReportProperty $SearchResult 'SearchEstimateBytes'; VerificationBytes=Get-EOReportProperty $SearchResult 'VerificationEstimateBytes'
         }
         Confidence=$Confidence; Warnings=@($Warnings); Rationale=@((Get-EOReportProperty $SearchResult 'Rationale' @()))
         FinalCommand=[pscustomobject]@{ Arguments=$commandArguments; Text=if ($commandArguments.Count) { Join-EOCommandLine $commandArguments } else { '' } }
@@ -124,6 +125,12 @@ function Format-EOHumanReport {
         $ratio=Get-EOReportProperty $Report.EstimatedSavings 'Ratio'; if ($null -ne $ratio) { $lines.Add("Savings  : ~$([math]::Round([double]$ratio*100,1))%") }
         $estimated=Get-EOReportProperty $Report.EstimatedSavings 'EstimatedBytes'
         if ($null -ne $estimated) { $low=Get-EOReportProperty $Report.EstimatedSavings 'LowerBytes'; $high=Get-EOReportProperty $Report.EstimatedSavings 'UpperBytes'; $sizeText=Format-EOByteSize $estimated; if ($null -ne $low -and $null -ne $high) { $sizeText += " ($(Format-EOByteSize $low) - $(Format-EOByteSize $high))" }; $lines.Add("Est size : $sizeText") }
+        $disagreement=Get-EOReportProperty $Report.EstimatedSavings 'DisagreementRatio'
+        $searchBytes=Get-EOReportProperty $Report.EstimatedSavings 'SearchBytes'
+        $verificationBytes=Get-EOReportProperty $Report.EstimatedSavings 'VerificationBytes'
+        if ($null -ne $disagreement -and [double]$disagreement -ge 0.25 -and $null -ne $searchBytes -and $null -ne $verificationBytes) {
+            $lines.Add("Size basis: search $(Format-EOByteSize $searchBytes); verification $(Format-EOByteSize $verificationBytes); larger used for savings decision")
+        }
     }
     if ($Report.Confidence) { $lines.Add("Confidence: $($Report.Confidence.Label) ($([math]::Round([double]$Report.Confidence.Score*100,0))%)") }
     if (@($Report.Rationale).Count) { $lines.Add(''); $lines.Add('Rationale:'); foreach ($reason in @($Report.Rationale)) { $lines.Add("  - $reason") } }

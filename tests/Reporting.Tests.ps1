@@ -24,6 +24,7 @@ Describe 'optimizer reporting' {
         }
         $search = [pscustomobject]@{
             Decision='ENCODE'; SelectedQuality=16; SavingsRatio=0.32; EstimatedBytes=68000000
+            SearchEstimateBytes=50000000; VerificationEstimateBytes=68000000; SizeEstimateSource='Verification'; SizeEstimateDisagreementRatio=0.36
             Rationale=@('Quality 16 passed independent verification.')
             AllEvaluations=@(
                 [pscustomobject]@{
@@ -42,7 +43,7 @@ Describe 'optimizer reporting' {
             FinalEvaluation=[pscustomobject]@{ Quality=16; MeanVmaf=98.1; WorstSampleVmaf=97.4; P05Vmaf=95.5; MeanXpsnr=47.2; MeanSsim=0.993; MeanPsnr=49.8 }
         }
         $confidence = [pscustomobject]@{ Label='HIGH'; Score=0.91; Reasons=@() }
-        $size = [pscustomobject]@{ EstimatedBytes=68000000; LowerBytes=62000000; UpperBytes=75000000; VideoKbps=760.0 }
+        $size = [pscustomobject]@{ EstimatedBytes=68000000; LowerBytes=45000000; UpperBytes=75000000; VideoKbps=760.0 }
         $report = New-EOReport -SourceProbe $source -ProfileName 'Conservative' -EncoderName 'hevc_nvenc' -EncoderRationale @('Hardware HEVC preferred for HEVC source.') -SamplePlan $samples -SearchResult $search -SizeEstimate $size -Confidence $confidence -Warnings @('example warning') -FinalCommand @('ffmpeg','-i','D:\video.mp4','-c:v','hevc_nvenc','-cq','16','out.mp4') -Alternatives ([pscustomobject]@{ Safer=15; Smaller=17 })
 
         $report.SchemaVersion | Should -Be 2
@@ -56,6 +57,9 @@ Describe 'optimizer reporting' {
         $report.Candidates[0].Samples[0].CandidateKbps | Should -Be 1000.0
         $report.Selected.Metrics.MeanVmaf | Should -Be 98.1
         $report.EstimatedSavings.Ratio | Should -Be 0.32
+        $report.EstimatedSavings.SearchBytes | Should -Be 50000000
+        $report.EstimatedSavings.VerificationBytes | Should -Be 68000000
+        (Format-EOHumanReport -Report $report) | Should -Match 'Size basis: search .* verification .* larger used for savings decision'
         $report.Confidence.Label | Should -Be 'HIGH'
         $report.Warnings | Should -Contain 'example warning'
         $report.FinalCommand.Text | Should -Match 'hevc_nvenc'

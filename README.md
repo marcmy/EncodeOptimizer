@@ -187,7 +187,7 @@ Batch mode additionally writes a per-file sidecar JSON under the selected output
 season1\episode.encodeoptimizer.json
 ```
 
-Reports include the source summary, selected samples, candidate evaluations, quality metrics, estimated size/savings, confidence, warnings, rationale, alternatives, and the exact final FFmpeg command when an encode is recommended. When search and verification produce materially different size estimates at the selected quality, the larger estimate is used for the savings decision and the disagreement is reported as a warning.
+Reports include the source summary, selected samples, candidate evaluations, quality metrics, estimated size/savings, confidence, warnings, rationale, alternatives, and the exact final FFmpeg command when an encode is recommended. When search and verification produce materially different size estimates at the selected quality, the larger estimate is used for the savings decision, the displayed range covers both phase ranges, and the disagreement reduces recommendation confidence. The report shows both phase estimates so the conservative size can be distinguished from a typical outcome.
 
 Local history may seed a future adaptive search for closely matching content classes, but history never bypasses measured verification.
 
@@ -227,7 +227,7 @@ The Windows GitHub Actions workflow runs unit and real FFmpeg integration jobs s
 - safe KEEP_SOURCE handling when a candidate sample encode fails;
 - recursive batch filtering, per-file output reports, and a real second-run exact resume.
 
-At the current branch revision the suite contains **99 passing unit tests and 10 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
+At the current branch revision the suite contains **100 passing unit tests and 10 passing real FFmpeg integration tests**. NVENC execution is not assumed on the hosted runner because it has no NVIDIA GPU; GPU-specific behavior is capability-gated and unit-tested through the discovered encoder policy.
 
 ## Design documents
 

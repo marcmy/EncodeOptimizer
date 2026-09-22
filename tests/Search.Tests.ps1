@@ -118,6 +118,10 @@ Describe 'adaptive quality search' {
         $result.EstimatedBytes | Should -Be 120000000
         $result.SizeEstimateSource | Should -Be 'Search'
         $result.SizeEstimateDisagreementRatio | Should -Be 0.5
+        $result.SizeEstimate.LowerBytes | Should -Be 75000000
+        $result.SizeEstimate.UpperBytes | Should -Be 125000000
+        $result.SearchEstimateBytes | Should -Be 120000000
+        $result.VerificationEstimateBytes | Should -Be 80000000
     }
 
     It 'does not KEEP_SOURCE merely for low savings when a requested transform makes re-encoding mandatory' {
@@ -171,6 +175,13 @@ Describe 'recommendation confidence' {
         $confidence = Get-EOConfidence -Coverage 0.95 -Diversity 0.90 -MinimumMargin 0.8 -MetricAgreement 0.95 -VerificationPassed -SearchStable
         $confidence.Label | Should -Be 'HIGH'
         $confidence.Score | Should -BeGreaterOrEqual 0.80
+    }
+
+    It 'reduces recommendation confidence when phase size estimates strongly disagree' {
+        $confidence = Get-EOConfidence -Coverage 1 -Diversity 0.83 -MinimumMargin 1 -MetricAgreement 0.95 -VerificationPassed -SearchStable -SizeEstimateDisagreementRatio 0.43
+
+        $confidence.Label | Should -Be 'MEDIUM'
+        $confidence.Reasons -join ' ' | Should -Match 'size estimates'
     }
 
     It 'drops confidence for edge cases and unstable verification' {

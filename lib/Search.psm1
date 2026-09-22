@@ -119,7 +119,8 @@ function Get-EOConfidence {
         [switch] $VerificationPassed,
         [switch] $SearchStable,
         [string[]] $EdgeCaseFlags = @(),
-        [double] $MetricConfidencePenalty = 0.0
+        [double] $MetricConfidencePenalty = 0.0,
+        [Nullable[double]] $SizeEstimateDisagreementRatio
     )
 
     $coverageScore = Limit-EOScore $Coverage
@@ -152,6 +153,11 @@ function Get-EOConfidence {
         if ($edgePenalties.ContainsKey($flag)) { $score -= [double]$edgePenalties[$flag] } else { $score -= 0.05 }
     }
     $score -= [math]::Max(0.0, $MetricConfidencePenalty)
+    if ($null -ne $SizeEstimateDisagreementRatio) {
+        $disagreement = [math]::Max(0.0, [double]$SizeEstimateDisagreementRatio)
+        $score -= [math]::Min(0.25, 0.5 * $disagreement)
+        if ($disagreement -ge 0.25) { $reasons.Add('Search and verification size estimates disagree substantially.') }
+    }
     $score = Limit-EOScore $score
 
     $label = if ($score -ge 0.80) { 'HIGH' } elseif ($score -ge 0.60) { 'MEDIUM' } else { 'LOW' }
@@ -166,6 +172,7 @@ function Get-EOConfidence {
         VerificationPassed = [bool]$VerificationPassed
         SearchStable = [bool]$SearchStable
         EdgeCaseFlags = @($EdgeCaseFlags)
+        SizeEstimateDisagreementRatio = $SizeEstimateDisagreementRatio
     }
 }
 
@@ -286,6 +293,8 @@ function Find-EOOptimalQuality {
             SizeEstimate = $null
             SizeEstimateSource = $null
             SizeEstimateDisagreementRatio = $null
+            SearchEstimateBytes = $null
+            VerificationEstimateBytes = $null
             MinimumSavingsRatio = $requiredSavings
             Rationale = @($rationale)
             SearchStable = $false
@@ -326,6 +335,8 @@ function Find-EOOptimalQuality {
             SizeEstimate = $null
             SizeEstimateSource = $null
             SizeEstimateDisagreementRatio = $null
+            SearchEstimateBytes = $null
+            VerificationEstimateBytes = $null
             MinimumSavingsRatio = $requiredSavings
             Rationale = @($rationale)
             SearchStable = $false
@@ -340,6 +351,8 @@ function Find-EOOptimalQuality {
     $finalResult = if ($verificationResults.Count) { $verificationResults[-1] } elseif ($searchCache.ContainsKey($selectedQuality)) { $searchCache[$selectedQuality] } else { $searchWinner }
     $searchEstimateResult = if ($searchCache.ContainsKey($selectedQuality)) { $searchCache[$selectedQuality] } else { $null }
     $verificationEstimateResult = if ($verificationResults.Count) { $verificationResults[-1] } else { $null }
+    $searchEstimateBytes = Get-EOSearchProperty $searchEstimateResult 'EstimatedBytes'
+    $verificationEstimateBytes = Get-EOSearchProperty $verificationEstimateResult 'EstimatedBytes'
     $sizeEstimateCandidates = [System.Collections.Generic.List[object]]::new()
     foreach ($candidate in @(
         [pscustomobject]@{ Source = 'Search'; Result = $searchEstimateResult }
@@ -367,6 +380,20 @@ function Find-EOOptimalQuality {
         Get-EOSearchProperty $selectedSizeEstimateCandidate.Result 'SizeEstimate'
     } else {
         Get-EOSearchProperty $finalResult 'SizeEstimate'
+    }
+    if ($null -ne $sizeEstimate -and $sizeEstimateCandidates.Count -ge 2) {
+        $lowerBounds = [System.Collections.Generic.List[double]]::new()
+        $upperBounds = [System.Collections.Generic.List[double]]::new()
+        foreach ($candidate in $sizeEstimateCandidates) {
+            $phaseEstimate = Get-EOSearchProperty $candidate.Result 'SizeEstimate'
+            $lowerBounds.Add([double](Get-EOSearchProperty $phaseEstimate 'LowerBytes' $candidate.EstimatedBytes))
+            $upperBounds.Add([double](Get-EOSearchProperty $phaseEstimate 'UpperBytes' $candidate.EstimatedBytes))
+            $lowerBounds.Add([double]$candidate.EstimatedBytes)
+            $upperBounds.Add([double]$candidate.EstimatedBytes)
+        }
+        $sizeEstimate = $sizeEstimate | Select-Object -Property *
+        $sizeEstimate | Add-Member -NotePropertyName LowerBytes -NotePropertyValue ([long][math]::Round(($lowerBounds | Measure-Object -Minimum).Minimum)) -Force
+        $sizeEstimate | Add-Member -NotePropertyName UpperBytes -NotePropertyValue ([long][math]::Round(($upperBounds | Measure-Object -Maximum).Maximum)) -Force
     }
     $sizeEstimateSource = if ($null -ne $selectedSizeEstimateCandidate) { [string]$selectedSizeEstimateCandidate.Source } else { 'FinalEvaluation' }
     $sizeEstimateDisagreementRatio = $null
@@ -405,6 +432,8 @@ function Find-EOOptimalQuality {
         SizeEstimate = $sizeEstimate
         SizeEstimateSource = $sizeEstimateSource
         SizeEstimateDisagreementRatio = $sizeEstimateDisagreementRatio
+        SearchEstimateBytes = $searchEstimateBytes
+        VerificationEstimateBytes = $verificationEstimateBytes
         MinimumSavingsRatio = $requiredSavings
         Rationale = @($rationale)
         SearchStable = ($selectedQuality -eq $initialVerificationQuality)
