@@ -83,7 +83,8 @@ function Get-EOContentFeatures {
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [object[]] $AnalysisWindows,
         [string] $FFmpegPath = 'ffmpeg',
-        [scriptblock] $CommandRunner
+        [scriptblock] $CommandRunner,
+        [scriptblock] $ProgressCallback
     )
 
     $features = [System.Collections.Generic.List[object]]::new()
@@ -128,11 +129,15 @@ function Get-EOContentFeatures {
         $gradient = Limit-EOUnit ((1.0 - $detail) * (1.0 - $dark) * 0.9)
         $static = Limit-EOUnit (1.0 - ($motion * 4.0))
 
-        $features.Add([pscustomobject]@{
+        $feature = [pscustomobject]@{
             Start = [double]$window.Start; Duration = [double]$window.Duration
             Motion = $motion; Detail = $detail; Noise = $noise; Dark = $dark
             Gradient = $gradient; Scene = $scene; Static = $static; Black = Limit-EOUnit $blackFraction
-        })
+        }
+        $features.Add($feature)
+        if ($ProgressCallback) {
+            & $ProgressCallback $features.Count $AnalysisWindows.Count $window $feature | Out-Null
+        }
     }
     return @($features)
 }

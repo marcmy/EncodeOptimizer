@@ -55,6 +55,18 @@ Use explicit FFmpeg binaries:
     -FFprobePath 'C:\ffmpeg\bin\ffprobe.exe'
 ```
 
+## Live progress
+
+Single-file analysis prints durable progress lines while it runs. The lines show the overall percentage, current phase, quality test, sample number and timestamp, measured metrics, pass/fail result, estimated size, and elapsed time. For example:
+
+```text
+[ 42.7%] SEARCH    -cq=18 sample 3/8 | candidate encode + metrics | start 3305.413s | duration 10s | elapsed 00:04:18
+[ 43.1%] SEARCH    -cq=18 sample 3/8 complete | VMAF=99.12 P05=97.84 bitrate 14989.9 kbps | 38/89 units | elapsed 00:04:24
+[ 51.0%] SEARCH    -cq=18 result | PASS | VMAF=98.71 P05=95.72 | margin 0.33 | estimated 10.54 GB | elapsed 00:05:02
+```
+
+Reference creation, VMAF baseline calibration, search samples, independent verification samples, final reporting, and AutoEncode validation are each reported as separate phases.
+
 ## How the quality comparison works
 
 When no video filter is requested, the encoded candidate is compared with the decoded source. When `-VideoFilter` is supplied, the same requested transformation is applied to the reference exactly once:

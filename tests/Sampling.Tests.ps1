@@ -54,6 +54,36 @@ lavfi.scd.score=0
         $feature.Noise | Should -BeLessThan 0.25
     }
 
+    It 'reports each completed content window through the progress callback' {
+        $windows = @(
+            [pscustomobject]@{ Start = 0.0; Duration = 4.0 },
+            [pscustomobject]@{ Start = 8.0; Duration = 4.0 }
+        )
+        $events = [System.Collections.Generic.List[object]]::new()
+        $runner = {
+            param($Executable, $Arguments)
+            @"
+lavfi.signalstats.YAVG=100
+lavfi.signalstats.YLOW=20
+lavfi.signalstats.YHIGH=220
+lavfi.signalstats.YDIF=2
+lavfi.bitplanenoise.0.1=0.02
+lavfi.scd.score=0
+"@
+        }
+
+        Get-EOContentFeatures -Path 'synthetic.mp4' -AnalysisWindows $windows -FFmpegPath 'ffmpeg' -CommandRunner $runner -ProgressCallback {
+            param($Index, $Count, $Window, $Feature)
+            $events.Add([pscustomobject]@{ Index = $Index; Count = $Count; Start = $Window.Start; Motion = $Feature.Motion })
+        } | Out-Null
+
+        $events.Count | Should -Be 2
+        $events[0].Index | Should -Be 1
+        $events[1].Index | Should -Be 2
+        $events[0].Count | Should -Be 2
+        $events[1].Start | Should -Be 8.0
+    }
+
     It 'provides disjoint search and verification samples with broad temporal coverage' {
         Get-Command Select-EOSamples -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         $windows = 0..11 | ForEach-Object { New-FeatureWindow -Start ($_ * 10) -Motion (0.15 + ($_ % 4) * 0.1) -Detail (0.2 + ($_ % 3) * 0.1) }
