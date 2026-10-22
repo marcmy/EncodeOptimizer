@@ -1,0 +1,64 @@
+name: Supply-chain audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions: {}
+
+jobs:
+  trivy:
+    name: Trivy security scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan repository with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: latest
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Upload findings to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: trivy-results.sarif
+
+  syft:
+    name: Generate independent SBOM
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate SPDX SBOM with Syft
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: sbom.spdx.json
+          dependency-snapshot: true
+          upload-artifact: true
+          upload-release-assets: false
